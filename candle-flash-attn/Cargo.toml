@@ -22,3 +22,6 @@ anyhow = { version = "1", features = ["backtrace"] }
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
 candle-nn = { path = "../candle-nn", features = ["cuda"] }
+
+[features]
+dynamic-linking = []
