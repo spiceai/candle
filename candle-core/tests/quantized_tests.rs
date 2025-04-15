@@ -6,7 +6,7 @@ use candle_core::{
     DType, Device, IndexOp, Module, Result, Tensor, Var,
 };
 use quantized::{k_quants, GgmlType};
-use rand::prelude::*;
+use rand::{prelude::*, random};
 
 const GGML_TEST_SIZE: usize = 32 * 128;
 
@@ -1110,13 +1110,11 @@ fn get_random_tensors(
     n: usize,
     device: &Device,
 ) -> Result<(Tensor, Tensor, Tensor)> {
-    let mut rng = StdRng::seed_from_u64(314159265358979);
-
     let lhs = (0..m * k)
-        .map(|_| rng.gen::<f32>() - 0.5)
+        .map(|_| random::<f32>() - 0.5)
         .collect::<Vec<_>>();
     let rhs = (0..n * k)
-        .map(|_| rng.gen::<f32>() - 0.5)
+        .map(|_| random::<f32>() - 0.5)
         .collect::<Vec<_>>();
 
     let lhs = Tensor::from_vec(lhs, (m, k), device)?;
