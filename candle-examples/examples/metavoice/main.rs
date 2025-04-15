@@ -250,7 +250,7 @@ fn main() -> Result<()> {
             let logits = logits.i(step)?.to_dtype(DType::F32)?;
             let logits = &(&logits / 1.0)?;
             let prs = candle_nn::ops::softmax_last_dim(logits)?.to_vec1::<f32>()?;
-            let distr = rand::distributions::WeightedIndex::new(prs.as_slice())?;
+            let distr = rand::distr::weighted::WeightedIndex::new(prs.as_slice())?;
             let sample = distr.sample(&mut rng) as u32;
             codes_.push(sample)
         }

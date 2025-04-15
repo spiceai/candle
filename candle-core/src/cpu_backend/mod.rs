@@ -3553,19 +3553,21 @@ impl BackendDevice for CpuDevice {
             }
             DType::BF16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distr::Uniform::new(bf16::from_f64(min), bf16::from_f64(max))
-                    .map_err(Error::wrap)?;
+                let normal: rand_distr::Uniform<f32> =
+                    rand_distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
-                    data.push(rng.sample::<bf16, _>(uniform))
+                    let sample: f32 = normal.sample(&mut rng);
+                    data.push(bf16::from_f32(sample));
                 }
                 Ok(CpuStorage::BF16(data))
             }
             DType::F16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distr::Uniform::new(f16::from_f64(min), f16::from_f64(max))
-                    .map_err(Error::wrap)?;
+                let normal: rand_distr::Uniform<f32> =
+                    rand_distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
-                    data.push(rng.sample::<f16, _>(uniform))
+                    let sample: f32 = normal.sample(&mut rng);
+                    data.push(f16::from_f32(sample));
                 }
                 Ok(CpuStorage::F16(data))
             }
@@ -3610,19 +3612,21 @@ impl BackendDevice for CpuDevice {
             }
             DType::BF16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(bf16::from_f64(mean), bf16::from_f64(std))
-                    .map_err(Error::wrap)?;
+                let normal: rand_distr::Normal<f32> =
+                    rand_distr::Normal::new(mean as f32, std as f32).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
-                    data.push(normal.sample(&mut rng))
+                    let sample: f32 = normal.sample(&mut rng);
+                    data.push(bf16::from_f32(sample));
                 }
                 Ok(CpuStorage::BF16(data))
             }
             DType::F16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(f16::from_f64(mean), f16::from_f64(std))
-                    .map_err(Error::wrap)?;
+                let normal: rand_distr::Normal<f32> =
+                    rand_distr::Normal::new(mean as f32, std as f32).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
-                    data.push(normal.sample(&mut rng))
+                    let sample: f32 = normal.sample(&mut rng);
+                    data.push(f16::from_f32(sample));
                 }
                 Ok(CpuStorage::F16(data))
             }
