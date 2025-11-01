@@ -43,19 +43,20 @@ const KERNEL_FILES: [&str; 33] = [
 ];
 
 fn main() -> Result<()> {
-    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed=build.rs");
     for kernel_file in KERNEL_FILES.iter() {
-        println!("cargo:rerun-if-changed={kernel_file}");
+        println!("cargo::rerun-if-changed={kernel_file}");
     }
-    println!("cargo:rerun-if-changed=kernels/flash_fwd_kernel.h");
-    println!("cargo:rerun-if-changed=kernels/flash_fwd_launch_template.h");
-    println!("cargo:rerun-if-changed=kernels/flash.h");
-    println!("cargo:rerun-if-changed=kernels/philox.cuh");
-    println!("cargo:rerun-if-changed=kernels/softmax.h");
-    println!("cargo:rerun-if-changed=kernels/utils.h");
-    println!("cargo:rerun-if-changed=kernels/kernel_traits.h");
-    println!("cargo:rerun-if-changed=kernels/block_info.h");
-    println!("cargo:rerun-if-changed=kernels/static_switch.h");
+    println!("cargo::rerun-if-changed=kernels/flash_fwd_kernel.h");
+    println!("cargo::rerun-if-changed=kernels/flash_fwd_launch_template.h");
+    println!("cargo::rerun-if-changed=kernels/flash.h");
+    println!("cargo::rerun-if-changed=kernels/philox.cuh");
+    println!("cargo::rerun-if-changed=kernels/softmax.h");
+    println!("cargo::rerun-if-changed=kernels/utils.h");
+    println!("cargo::rerun-if-changed=kernels/kernel_traits.h");
+    println!("cargo::rerun-if-changed=kernels/block_info.h");
+    println!("cargo::rerun-if-changed=kernels/static_switch.h");
+    println!("cargo::rerun-if-changed=kernels/hardware_info.h");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").context("OUT_DIR not set")?);
     let build_dir = match std::env::var("CANDLE_FLASH_ATTN_BUILD_DIR") {
         Err(_) =>
@@ -89,6 +90,7 @@ fn main() -> Result<()> {
         .arg("--use_fast_math")
         .arg("--verbose");
 
+<<<<<<< HEAD
     if let Ok(target) = std::env::var("TARGET") {
         if target.contains("msvc") {
             // https://github.com/EricLBuehler/mistral.rs/issues/941
@@ -103,11 +105,24 @@ fn main() -> Result<()> {
     if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
         builder = builder.arg("--compiler-options");
         builder = builder.arg(cuda_nvcc_flags_env);
+=======
+    let mut is_target_msvc = false;
+    if let Ok(target) = std::env::var("TARGET") {
+        if target.contains("msvc") {
+            is_target_msvc = true;
+            builder = builder.arg("-D_USE_MATH_DEFINES");
+        }
+    }
+
+    if !is_target_msvc {
+        builder = builder.arg("-Xcompiler").arg("-fPIC");
+>>>>>>> main
     }
 
     let out_file = build_dir.join("libflashattention.a");
     builder.build_lib(out_file);
 
+<<<<<<< HEAD
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=flashattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
@@ -123,5 +138,13 @@ fn main() -> Result<()> {
         println!("cargo:rustc-link-lib=dylib=stdc++");
     }
 
+=======
+    println!("cargo::rustc-link-search={}", build_dir.display());
+    println!("cargo::rustc-link-lib=flashattention");
+    println!("cargo::rustc-link-lib=dylib=cudart");
+    if !is_target_msvc {
+        println!("cargo::rustc-link-lib=dylib=stdc++");
+    }
+>>>>>>> main
     Ok(())
 }

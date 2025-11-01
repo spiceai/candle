@@ -1,15 +1,27 @@
-use metal::{
-    Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
-    FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
-};
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::sync::RwLock;
-
+pub mod err;
+pub mod kernel;
+pub mod kernels;
+pub mod metal;
+pub mod source;
 pub mod utils;
+
+pub use err::MetalKernelError;
+pub use kernel::Kernels;
+pub use kernels::{
+    affine::*, call_binary_contiguous, call_binary_strided, call_mlx_gemm, cast::*, convolution::*,
+    fill::*, indexing::*, quantized::*, random::*, reduce::*, sdpa::*, sort::*, ternary::*, unary,
+    unary::*, GemmDType, GgmlDType,
+};
+use metal::{
+    BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline,
+    ConstantValues, Device, Function, Library, MTLResourceOptions, Value,
+};
+use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
+use source::Source;
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
 
+<<<<<<< HEAD
 const AFFINE: &str = include_str!("affine.metal");
 const BINARY: &str = include_str!("binary.metal");
 const CAST: &str = include_str!("cast.metal");
@@ -1757,11 +1769,24 @@ pub fn call_gemm(
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum SdpaDType {
+=======
+pub const RESOURCE_OPTIONS: MTLResourceOptions =
+    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
+//| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
+//);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DType {
+>>>>>>> main
     BF16,
     F16,
     F32,
+    I64,
+    U32,
+    U8,
 }
 
+<<<<<<< HEAD
 /// SDPA full is supported when:
 /// - q head dim == 64, 128
 /// - no mask
@@ -3344,6 +3369,19 @@ pub fn call_const_fill(
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
+=======
+impl DType {
+    fn size_in_bytes(&self) -> usize {
+        match self {
+            Self::U8 => 1,
+            Self::U32 => 4,
+            Self::I64 => 8,
+            Self::BF16 => 2,
+            Self::F16 => 2,
+            Self::F32 => 4,
+        }
+    }
+>>>>>>> main
 }
 
 #[allow(clippy::too_many_arguments)]

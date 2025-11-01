@@ -1,3 +1,5 @@
+//! Tensor Operation Enums and Traits
+//!
 #![allow(clippy::redundant_closure_call)]
 use crate::Tensor;
 use float8::F8E4M3;
@@ -79,6 +81,7 @@ pub enum Op {
     Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
     Gather(Tensor, Tensor, usize),
+    Scatter(Tensor, Tensor, Tensor, usize),
     ScatterAdd(Tensor, Tensor, Tensor, usize),
     IndexSelect(Tensor, Tensor, usize),
     IndexAdd(Tensor, Tensor, Tensor, usize),

@@ -13,10 +13,6 @@ pub enum DType {
     U8,
     // Unsigned 32 bits integer.
     U32,
-    // Signed 16 bits integer.
-    I16,
-    // Signed 32 bits integer.
-    I32,
     // Signed 64 bits integer.
     I64,
     // Brain floating-point using half precision (16 bits).
@@ -46,8 +42,6 @@ impl std::str::FromStr for DType {
         match s {
             "u8" => Ok(Self::U8),
             "u32" => Ok(Self::U32),
-            "i16" => Ok(Self::I16),
-            "i32" => Ok(Self::I32),
             "i64" => Ok(Self::I64),
             "bf16" => Ok(Self::BF16),
             "f16" => Ok(Self::F16),
@@ -65,8 +59,6 @@ impl DType {
         match self {
             Self::U8 => "u8",
             Self::U32 => "u32",
-            Self::I16 => "i16",
-            Self::I32 => "i32",
             Self::I64 => "i64",
             Self::BF16 => "bf16",
             Self::F16 => "f16",
@@ -82,8 +74,6 @@ impl DType {
             Self::U8 => 1,
             Self::F8E4M3 => 1,
             Self::U32 => 4,
-            Self::I16 => 2,
-            Self::I32 => 4,
             Self::I64 => 8,
             Self::BF16 => 2,
             Self::F16 => 2,
@@ -94,14 +84,14 @@ impl DType {
 
     pub fn is_int(&self) -> bool {
         match self {
-            Self::U8 | Self::U32 | Self::I16 | Self::I32 | Self::I64 => true,
+            Self::U8 | Self::U32 | Self::I64 => true,
             Self::BF16 | Self::F16 | Self::F32 | Self::F64 | Self::F8E4M3 => false,
         }
     }
 
     pub fn is_float(&self) -> bool {
         match self {
-            Self::U8 | Self::U32 | Self::I16 | Self::I32 | Self::I64 => false,
+            Self::U8 | Self::U32 | Self::I64 => false,
             Self::BF16 | Self::F16 | Self::F32 | Self::F64 | Self::F8E4M3 => true,
         }
     }
@@ -123,6 +113,7 @@ pub trait WithDType:
 
     fn from_f64(v: f64) -> Self;
     fn to_f64(self) -> f64;
+    fn to_scalar(self) -> crate::scalar::Scalar;
     fn cpu_storage_ref(data: &[Self]) -> CpuStorageRef<'_>;
     fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage;
 
@@ -145,6 +136,10 @@ macro_rules! with_dtype {
 
             fn to_f64(self) -> f64 {
                 $to_f64(self)
+            }
+
+            fn to_scalar(self) -> crate::scalar::Scalar {
+                crate::scalar::Scalar::$dtype(self)
             }
 
             fn cpu_storage_ref(data: &[Self]) -> CpuStorageRef<'_> {
@@ -186,8 +181,6 @@ use half::{bf16, f16};
 
 with_dtype!(u8, U8, |v: f64| v as u8, |v: u8| v as f64);
 with_dtype!(u32, U32, |v: f64| v as u32, |v: u32| v as f64);
-with_dtype!(i16, I16, |v: f64| v as i16, |v: i16| v as f64);
-with_dtype!(i32, I32, |v: f64| v as i32, |v: i32| v as f64);
 with_dtype!(i64, I64, |v: f64| v as i64, |v: i64| v as f64);
 with_dtype!(f16, F16, f16::from_f64, f16::to_f64);
 with_dtype!(bf16, BF16, bf16::from_f64, bf16::to_f64);
@@ -205,27 +198,9 @@ impl VecOps for F8E4M3 {
     }
 }
 
-pub trait IntDType: WithDType {
+pub trait IntDType: WithDType + num_traits::Bounded {
     fn is_true(&self) -> bool;
     fn as_usize(&self) -> usize;
-}
-
-impl IntDType for i16 {
-    fn is_true(&self) -> bool {
-        *self != 0
-    }
-    fn as_usize(&self) -> usize {
-        *self as usize
-    }
-}
-
-impl IntDType for i32 {
-    fn is_true(&self) -> bool {
-        *self != 0
-    }
-    fn as_usize(&self) -> usize {
-        *self as usize
-    }
 }
 
 impl IntDType for i64 {

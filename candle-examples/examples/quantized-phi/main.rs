@@ -25,6 +25,8 @@ enum Which {
     /// Alternative implementation of phi-3, based on llama.
     #[value(name = "phi-3b")]
     Phi3b,
+    #[value(name = "phi-4")]
+    Phi4,
 }
 
 #[derive(Parser, Debug)]
@@ -100,7 +102,12 @@ impl Args {
                 let api = hf_hub::api::sync::Api::new()?;
                 let repo = match self.which {
                     Which::Phi2 => "microsoft/phi-2",
+<<<<<<< HEAD
                     Which::Phi3b => "microsoft/Phi-3-mini-4k-instruct",
+=======
+                    Which::Phi3 | Which::Phi3b => "microsoft/Phi-3-mini-4k-instruct",
+                    Which::Phi4 => "microsoft/phi-4",
+>>>>>>> main
                 };
                 let api = api.model(repo.to_string());
                 api.get("tokenizer.json")?
@@ -120,6 +127,7 @@ impl Args {
                         "Phi-3-mini-4k-instruct-q4.gguf",
                         "5eef2ce24766d31909c0b269fe90c817a8f263fb",
                     ),
+                    Which::Phi4 => ("microsoft/phi-4-gguf", "phi-4-q4.gguf", "main"),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
                 api.repo(hf_hub::Repo::with_revision(
@@ -136,7 +144,7 @@ impl Args {
 
 fn format_size(size_in_bytes: usize) -> String {
     if size_in_bytes < 1_000 {
-        format!("{}B", size_in_bytes)
+        format!("{size_in_bytes}B")
     } else if size_in_bytes < 1_000_000 {
         format!("{:.2}KB", size_in_bytes as f64 / 1e3)
     } else if size_in_bytes < 1_000_000_000 {
@@ -206,6 +214,15 @@ fn main() -> anyhow::Result<()> {
         );
         match args.which {
             Which::Phi2 => Model::Phi2(Phi2::from_gguf(model, &mut file, &device)?),
+<<<<<<< HEAD
+=======
+            Which::Phi3 | Which::Phi4 => Model::Phi3(Phi3::from_gguf(
+                args.use_flash_attn,
+                model,
+                &mut file,
+                &device,
+            )?),
+>>>>>>> main
             Which::Phi3b => Model::Phi3b(Phi3b::from_gguf(model, &mut file, &device)?),
         }
     };

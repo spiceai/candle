@@ -7,8 +7,8 @@
 //!
 //! let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
 //! let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
-//!
 //! let c = a.matmul(&b)?;
+//!
 //! # Ok(())}
 //! ```
 //!
@@ -44,7 +44,7 @@
 //! - [candle-examples](https://docs.rs/candle-examples/). Examples of Candle in Use.
 //! - [candle-onnx](https://docs.rs/candle-onnx/). Loading and using ONNX models.
 //! - [candle-pyo3](https://docs.rs/candle-pyo3/). Access to Candle from Python.
-//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implemntation of many published transformer models.
+//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implementation of many published transformer models.
 //!
 
 #[cfg(feature = "accelerate")]
@@ -141,7 +141,7 @@ impl ToUsize2 for (usize, usize) {
     }
 }
 
-// A simple trait defining a module with forward method using a single argument.
+/// Defining a module with forward method using a single argument.
 pub trait Module {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
 }
@@ -161,8 +161,8 @@ impl<M: Module> Module for Option<&M> {
     }
 }
 
-// A trait defining a module with forward method using a single tensor argument and a flag to
-// separate the training and evaluation behaviors.
+/// A single forward method using a single single tensor argument and a flag to
+/// separate the training and evaluation behaviors.
 pub trait ModuleT {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor>;
 }

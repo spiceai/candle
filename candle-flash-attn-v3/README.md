@@ -1,6 +1,7 @@
 # Candle Flash Attention v3 Layer
 
 Flash Attention v3 Layer for Hopper (compatible nvidia `sm90a` arch) and the candle framework. 
+<<<<<<< HEAD
 
 Work supported by Baseten (https://github.com/basetenlabs)
 If you are working on the intersection of CUDA / LLMs and Inference already, feel free to reach out, [we are hiring.](https://www.baseten.co/careers/)
@@ -38,3 +39,5 @@ candle-nn = { version = "*" }
 candle-transformers = { version = "*" }
 baseten-candle-flash-attn-v3 = { git = "https://github.com/michaelfeil/candle-flash-attn-v3", rev = "main", optional = true }
 ````
+=======
+>>>>>>> main
