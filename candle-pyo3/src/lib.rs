@@ -17,7 +17,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use ::candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
+use candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
 
 mod utils;
 use utils::wrap_err;
@@ -1081,7 +1081,7 @@ impl PyTensor {
     /// Quantize the tensor.
     /// &RETURNS&: QTensor
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
-        use ::candle::quantized;
+        use candle::quantized;
         let res = match quantized_dtype.to_lowercase().as_str() {
             "q2k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q2K),
             "q3k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q3K),
@@ -1338,7 +1338,7 @@ fn load_gguf(
     py: Python<'_>,
 ) -> PyResult<(PyObject, PyObject)> {
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    use ::candle::quantized::gguf_file;
+    use candle::quantized::gguf_file;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
         let v: PyObject = match v {
             gguf_file::Value::U8(x) => x.into_py(py),
@@ -1391,7 +1391,7 @@ fn load_gguf(
 )]
 /// Save quantized tensors and metadata to a GGUF file.
 fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) -> PyResult<()> {
-    use ::candle::quantized::gguf_file;
+    use candle::quantized::gguf_file;
 
     fn pyobject_to_gguf_value(v: &Bound<PyAny>, py: Python<'_>) -> PyResult<gguf_file::Value> {
         let v: gguf_file::Value = if let Ok(x) = v.extract::<u8>() {
