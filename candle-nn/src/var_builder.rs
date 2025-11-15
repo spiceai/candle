@@ -35,8 +35,8 @@ pub type VarBuilder<'a> = VarBuilderArgs<'a, Box<dyn SimpleBackend + 'a>>;
 
 struct TensorData<B: Backend> {
     backend: Arc<B>,
-    pub dtype: DType,
     pub device: Device,
+    pub dtype: DType,
 }
 
 /// A trait that defines how tensor data is retrieved.
@@ -107,8 +107,8 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
     pub fn new_with_args(backend: B, dtype: DType, dev: &Device) -> Self {
         let data = TensorData {
             backend: Arc::new(backend),
-            dtype,
             device: dev.clone(),
+            dtype,
         };
         Self {
             data: Arc::new(data),
@@ -302,6 +302,32 @@ impl SimpleBackend for HashMap<String, Tensor> {
             .bt())?
         }
         Ok(tensor)
+    }
+
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let tensor = self
+            .get(name)
+            .ok_or_else(|| {
+                Error::CannotFindTensor {
+                    path: name.to_string(),
+                }
+                .bt()
+            })?
+            .clone();
+        tensor.to_device(dev)?.to_dtype(dtype)
+    }
+
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let tensor = self
+            .get(name)
+            .ok_or_else(|| {
+                Error::CannotFindTensor {
+                    path: name.to_string(),
+                }
+                .bt()
+            })?
+            .clone();
+        tensor.to_device(dev)?.to_dtype(dtype)
     }
 
     fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
@@ -568,8 +594,8 @@ impl<'a> VarBuilder<'a> {
     ) -> Self {
         let data = TensorData {
             backend: Arc::new(backend),
-            dtype,
             device,
+            dtype,
         };
         Self {
             data: Arc::new(data),
@@ -638,7 +664,17 @@ impl<'a> VarBuilder<'a> {
         let pth = candle::pickle::PthTensors::new(p, None)?;
         Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
     }
-
+    /// Initializes a `VarBuilder` that retrieves tensors stored in a pytorch pth file.
+    /// similar to [`from_pth`] but requires a `state_key`.
+    pub fn from_pth_with_state<P: AsRef<std::path::Path>>(
+        p: P,
+        dtype: DType,
+        state_key: &str,
+        dev: &Device,
+    ) -> Result<Self> {
+        let pth = candle::pickle::PthTensors::new(p, Some(state_key))?;
+        Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
+    }
     /// Gets a VarBuilder that applies some renaming function on tensor it gets queried for before
     /// passing the new names to the inner VarBuilder.
     ///
@@ -676,8 +712,8 @@ impl<'a> VarBuilder<'a> {
         let backend: Box<dyn SimpleBackend + 'a> = Box::new(backend);
         let data = TensorData {
             backend: Arc::new(backend),
-            dtype,
             device,
+            dtype,
         };
         Self {
             data: Arc::new(data),

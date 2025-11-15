@@ -1,5 +1,7 @@
 #![allow(clippy::redundant_closure_call)]
+#![allow(clippy::useless_conversion)]
 use float8::F8E4M3;
+use half::{bf16, f16};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
@@ -9,15 +11,13 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use half::{bf16, f16};
-
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use ::candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
+use candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
 
 mod utils;
 use utils::wrap_err;
@@ -524,9 +524,7 @@ impl PyTensor {
             // Check that the index is in range
             if actual_index < 0 || actual_index >= dims[current_dim] as isize {
                 return Err(PyValueError::new_err(format!(
-                    "index out of range for dimension '{i}' with indexer '{value}'",
-                    i = current_dim,
-                    value = index
+                    "index out of range for dimension '{current_dim}' with indexer '{index}'"
                 )));
             }
             Ok(actual_index as usize)
@@ -586,8 +584,7 @@ impl PyTensor {
                 Ok((Indexer::Expand, current_dim))
             } else {
                 Err(PyTypeError::new_err(format!(
-                    "unsupported indexer {}",
-                    py_indexer
+                    "unsupported indexer {py_indexer}"
                 )))
             }
         }
@@ -754,7 +751,7 @@ impl PyTensor {
 
             compare(&self.0, &scalar_tensor)
         } else {
-            return Err(PyTypeError::new_err("unsupported rhs for __richcmp__"));
+            Err(PyTypeError::new_err("unsupported rhs for __richcmp__"))
         }
     }
 
@@ -1084,7 +1081,7 @@ impl PyTensor {
     /// Quantize the tensor.
     /// &RETURNS&: QTensor
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
-        use ::candle::quantized;
+        use candle::quantized;
         let res = match quantized_dtype.to_lowercase().as_str() {
             "q2k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q2K),
             "q3k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q3K),
@@ -1341,7 +1338,7 @@ fn load_gguf(
     py: Python<'_>,
 ) -> PyResult<(PyObject, PyObject)> {
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    use ::candle::quantized::gguf_file;
+    use candle::quantized::gguf_file;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
         let v: PyObject = match v {
             gguf_file::Value::U8(x) => x.into_py(py),
@@ -1392,9 +1389,9 @@ fn load_gguf(
 #[pyo3(
     signature = (path, tensors, metadata)
 )]
-/// Save quanitzed tensors and metadata to a GGUF file.
+/// Save quantized tensors and metadata to a GGUF file.
 fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) -> PyResult<()> {
-    use ::candle::quantized::gguf_file;
+    use candle::quantized::gguf_file;
 
     fn pyobject_to_gguf_value(v: &Bound<PyAny>, py: Python<'_>) -> PyResult<gguf_file::Value> {
         let v: gguf_file::Value = if let Ok(x) = v.extract::<u8>() {
@@ -1429,8 +1426,7 @@ fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) 
             gguf_file::Value::Array(x)
         } else {
             return Err(PyErr::new::<PyValueError, _>(format!(
-                "unsupported type {:?}",
-                v
+                "unsupported type {v:?}"
             )));
         };
         Ok(v)

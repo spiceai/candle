@@ -227,113 +227,133 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 }
 
 template <typename T>
-__device__ void attn_soft_max(const T * x, const T * mask, T * dst, const int ncols, const int nrows_y, const int elem_per_batch, const float scale) {
-    const int tid  = threadIdx.x;
-    const int rowx = blockIdx.x;
-    const int rowy = rowx % nrows_y; // broadcast the mask in the row dimension
+__device__ void attn_soft_max(
+  const T * x,
+  const T * mask,
+  T * dst,
+  const int ncols,
+  const int nrows_y,
+  const int elem_per_batch,
+  const float scale
+) {
+  const int tid = threadIdx.x;
+  const int rowx = blockIdx.x;
+  const int rowy = rowx % nrows_y; // broadcast the mask in the row dimension
 
-    const int block_size = blockDim.x;
+  const int block_size = blockDim.x;
 
-    const int warp_id = threadIdx.x / WARP_SIZE;
-    const int lane_id = threadIdx.x % WARP_SIZE;
+  const int warp_id = threadIdx.x / WARP_SIZE;
+  const int lane_id = threadIdx.x % WARP_SIZE;
 
-    extern __shared__ float smem[];
-    float * buf_iw = smem; // shared memory buffer for inter-warp communication
-    // shared memory buffer to cache values between iterations:
-    T * vals = dst + (int64_t)rowx*ncols;
+  extern __shared__ float smem[];
+  float *buf_iw = smem; // shared memory buffer for inter-warp communication
+  // shared memory buffer to cache values between iterations:
+  T *vals = dst + static_cast<int64_t>(rowx) * ncols;
 
-    float max_val = -INFINITY;
+  float max_val = -INFINITY;
 
 #pragma unroll
-    for (int col0 = 0; col0 < ncols; col0 += block_size) {
-        const int col = col0 + tid;
+  for (int col0 = 0; col0 < ncols; col0 += block_size) {
+    const int col = col0 + tid;
 
-        if (col >= ncols) {
-            break;
-        }
-
-        const int64_t ix = (int64_t)rowx*ncols + col;
-
-        const int64_t b_idx = elem_per_batch > 0 ? ix / elem_per_batch : 0;
-        const int64_t iy = (int64_t)b_idx * (ncols*nrows_y) + rowy*ncols + col;
-
-        const float val = float(x[ix]) * scale + (mask ? float(mask[iy]) : 0.0f);
-
-        vals[col] = val;
-        max_val = max(max_val, val);
+    if (col >= ncols) {
+      break;
     }
 
-    // find the max value in the block
+    const int64_t ix = static_cast<int64_t>(rowx) * ncols + col;
+
+    const int64_t b_idx = elem_per_batch > 0 ? ix / elem_per_batch : 0;
+    const int64_t iy = static_cast<int64_t>(b_idx) * (ncols * nrows_y) + rowy * ncols + col;
+
+    const float val = float(x[ix]) * scale + (mask ? float(mask[iy]) : 0.0f);
+
+    vals[col] = val;
+    max_val = max(max_val, val);
+  }
+
+  // find the max value in the block
+  max_val = warp_reduce_max(max_val);
+  if (block_size > WARP_SIZE) {
+    if (warp_id == 0) {
+      buf_iw[lane_id] = -INFINITY;
+    }
+    __syncthreads();
+
+    if (lane_id == 0) {
+      buf_iw[warp_id] = max_val;
+    }
+    __syncthreads();
+
+    max_val = buf_iw[lane_id];
     max_val = warp_reduce_max(max_val);
-    if (block_size > WARP_SIZE) {
-        if (warp_id == 0) {
-            buf_iw[lane_id] = -INFINITY;
-        }
-        __syncthreads();
+  }
 
-        if (lane_id == 0) {
-            buf_iw[warp_id] = max_val;
-        }
-        __syncthreads();
-
-        max_val = buf_iw[lane_id];
-        max_val = warp_reduce_max(max_val);
-    }
-
-    float tmp = 0.0f; // partial sum
+  float tmp = 0.0f; // partial sum
 
 #pragma unroll
-    for (int col0 = 0; col0 < ncols; col0 += block_size) {
-        const int col = col0 + tid;
+  for (int col0 = 0; col0 < ncols; col0 += block_size) {
+    const int col = col0 + tid;
 
-        if (col >= ncols) {
-            break;
-        }
-
-        const float val = expf(float(vals[col]) - max_val);
-        tmp += val;
-        vals[col] = val;
+    if (col >= ncols) {
+      break;
     }
 
-    // find the sum of exps in the block
+    const float val = expf(float(vals[col]) - max_val);
+    tmp += val;
+    vals[col] = val;
+  }
+
+  // find the sum of exps in the block
+  tmp = warp_reduce_sum(tmp);
+  if (block_size > WARP_SIZE) {
+    __syncthreads();
+    if (warp_id == 0) {
+      buf_iw[lane_id] = 0.0f;
+    }
+    __syncthreads();
+
+    if (lane_id == 0) {
+      buf_iw[warp_id] = tmp;
+    }
+    __syncthreads();
+
+    tmp = buf_iw[lane_id];
     tmp = warp_reduce_sum(tmp);
-    if (block_size > WARP_SIZE) {
-        __syncthreads();
-        if (warp_id == 0) {
-            buf_iw[lane_id] = 0.0f;
-        }
-        __syncthreads();
+  }
 
-        if (lane_id == 0) {
-            buf_iw[warp_id] = tmp;
-        }
-        __syncthreads();
-
-        tmp = buf_iw[lane_id];
-        tmp = warp_reduce_sum(tmp);
-    }
-
-    const float inv_sum = 1.0f / tmp;
+  const float inv_sum = 1.0f / tmp;
 
 #pragma unroll
-    for (int col0 = 0; col0 < ncols; col0 += block_size) {
-        const int col = col0 + tid;
+  for (int col0 = 0; col0 < ncols; col0 += block_size) {
+    const int col = col0 + tid;
 
-        if (col >= ncols) {
-            return;
-        }
-
-        const int64_t idst = (int64_t)rowx*ncols + col;
-        dst[idst] = float(vals[col]) * inv_sum;
+    if (col >= ncols) {
+      return;
     }
+
+    const int64_t idst = static_cast<int64_t>(rowx) * ncols + col;
+    dst[idst] = float(vals[col]) * inv_sum;
+  }
 }
 
 template <typename T>
-__device__ void ropei(const T * src, const T * cos, const T * sin, T * dst, const uint32_t bh, const uint32_t td) {
+__device__ void ropei(
+  const T * src,
+  const T * cos,
+  const T * sin,
+  T * dst,
+  const uint32_t bh,
+  const uint32_t td,
+  const uint32_t stride_b
+) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (2 * idx >= bh * td) return;
 
     uint32_t rope_idx = idx % (td / 2);
+    if (stride_b > 0) {
+      uint32_t b_idx = (2 * idx) / stride_b;
+      rope_idx += b_idx * (td / 2);
+    }
     T c = cos[rope_idx];
     T s = sin[rope_idx];
 
@@ -342,7 +362,7 @@ __device__ void ropei(const T * src, const T * cos, const T * sin, T * dst, cons
 }
 
 template <typename T>
-__device__ void rope(const T * src, const T * cos, const T * sin, T * dst, const uint32_t bh, const uint32_t td, const uint32_t d) {
+__device__ void rope(const T * src, const T * cos, const T * sin, T * dst, const uint32_t bh, const uint32_t td, const uint32_t d, const uint32_t stride_b) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (2 * idx >= bh * td) return;
 
@@ -353,6 +373,10 @@ __device__ void rope(const T * src, const T * cos, const T * sin, T * dst, const
     uint32_t i1 = i_bh * td + i_t * d + i_d;
     uint32_t i2 = i1 + d / 2;
     uint32_t i_cs = i_t * (d / 2) + i_d;
+    if (stride_b > 0) {
+      uint32_t b_idx = (2 * idx) / stride_b;
+      i_cs += b_idx * (td / 2);
+    }
     T c = cos[i_cs];
     T s = sin[i_cs];
 
@@ -369,7 +393,8 @@ __device__ void rope_thd(
     const uint32_t b,
     const uint32_t t,
     const uint32_t h,
-    const uint32_t d
+    const uint32_t d,
+    const uint32_t stride_b
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (2 * idx >= b * t * h * d) return;
@@ -380,6 +405,10 @@ __device__ void rope_thd(
     uint32_t i1 = i_bth * d + i_d;
     uint32_t i2 = i1 + d / 2;
     uint32_t i_cs = i_t * (d / 2) + i_d;
+    if (stride_b > 0) {
+      uint32_t b_idx = (2 * idx) / stride_b;
+      i_cs += b_idx * ((t * d) / 2);
+    }
     T c = cos[i_cs];
     T s = sin[i_cs];
 
@@ -669,8 +698,9 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
       const TYPENAME *sin, \
       TYPENAME *dst, \
       const uint32_t bh, \
-      const uint32_t td) { \
-    ropei<TYPENAME>(src, cos, sin, dst, bh, td); \
+      const uint32_t td, \
+      const uint32_t stride_b) { \
+    ropei<TYPENAME>(src, cos, sin, dst, bh, td, stride_b); \
   } \
   extern "C" __global__ void FN_NAME( \
       const TYPENAME *src, \
@@ -679,8 +709,9 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
       TYPENAME *dst, \
       const uint32_t bh, \
       const uint32_t td, \
-      const uint32_t d) { \
-    rope<TYPENAME>(src, cos, sin, dst, bh, td, d); \
+      const uint32_t d, \
+      const uint32_t stride_b) { \
+    rope<TYPENAME>(src, cos, sin, dst, bh, td, d, stride_b); \
   } \
   extern "C" __global__ void FN_NAME_THD( \
       const TYPENAME *src, \
@@ -690,8 +721,9 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
       const uint32_t b, \
       const uint32_t t, \
       const uint32_t h, \
-      const uint32_t d) { \
-    rope_thd<TYPENAME>(src, cos, sin, dst, b, t, h, d); \
+      const uint32_t d, \
+      const uint32_t stride_b) { \
+    rope_thd<TYPENAME>(src, cos, sin, dst, b, t, h, d, stride_b); \
   } \
 
 #if __CUDA_ARCH__ >= 800

@@ -1,3 +1,12 @@
+//! The LLaVA (Large Language and Vision Assistant) model.
+//!
+//! This provides the main model implementation combining a vision tower (CLIP) with
+//! language model (Llama) for multimodal capabilities. The architecture implements the training-free projection technique.
+//!
+//! - 💻[GH Link](https://github.com/haotian-liu/LLaVA/tree/main)
+//! - 📝 [Paper](https://arxiv.org/abs/2304.08485)/ Visual Instruction Tuning
+//!
+
 pub mod config;
 pub mod utils;
 
@@ -5,7 +14,7 @@ use crate::models::clip::vision_model::{ClipVisionConfig, ClipVisionTransformer}
 use crate::models::llama::{Cache, Llama};
 use crate::models::with_tracing::linear;
 
-use candle::{bail, Device, IndexOp, Result, Tensor};
+use candle::{bail, Context, Device, IndexOp, Result, Tensor};
 use candle_nn::{seq, Activation, Module, Sequential, VarBuilder};
 use fancy_regex::Regex;
 use utils::get_anyres_image_grid_shape;
@@ -136,7 +145,7 @@ impl ClipVisionTower {
         let config = if config.is_none() {
             ClipVisionConfig::clip_vit_large_patch14_336()
         } else {
-            config.clone().unwrap()
+            config.clone().context("no config")?
         };
         let select_layer = match select_layer {
             -1 | -2 => select_layer,
@@ -253,14 +262,14 @@ impl LLaVA {
         let image_features = if mm_patch_merge_type == "flat" {
             image_features
                 .iter()
-                .map(|x| x.flatten(0, 1).unwrap())
-                .collect::<Vec<Tensor>>()
+                .map(|x| x.flatten(0, 1))
+                .collect::<Result<Vec<Tensor>>>()?
         } else if mm_patch_merge_type.starts_with("spatial") {
             let mut new_image_features = Vec::new();
             for (image_idx, image_feature) in image_features.iter().enumerate() {
                 let new_image_feature = if image_feature.dims()[0] > 1 {
-                    let base_image_feature = image_feature.get(0).unwrap();
-                    let patch_image_feature = image_feature.i(1..).unwrap();
+                    let base_image_feature = image_feature.get(0)?;
+                    let patch_image_feature = image_feature.i(1..)?;
                     let height = self.clip_vision_tower.num_patches_per_side();
                     let width = height;
                     assert_eq!(height * width, base_image_feature.dims()[0]);
@@ -304,16 +313,12 @@ impl LLaVA {
                     };
                     Tensor::cat(&[base_image_feature, new_image_feature], 0)?
                 } else {
-                    let new_image_feature = image_feature.get(0).unwrap();
+                    let new_image_feature = image_feature.get(0)?;
                     if mm_patch_merge_type.contains("unpad") {
                         Tensor::cat(
-                            &[
-                                new_image_feature,
-                                self.image_newline.clone().unsqueeze(0).unwrap(),
-                            ],
+                            &[new_image_feature, self.image_newline.clone().unsqueeze(0)?],
                             0,
-                        )
-                        .unwrap()
+                        )?
                     } else {
                         new_image_feature
                     }
@@ -380,7 +385,7 @@ impl LLaVA {
         }
         cur_new_input_embeds.push(input_embed_no_ims[image_features.len()].clone());
         let new_input_embeds = Tensor::cat(&cur_new_input_embeds, 0)?;
-        //trancate
+        //truncate
         let new_input_embeds =
             if let Some(tokenizer_model_max_length) = self.config.tokenizer_model_max_length {
                 let (new_input_embeds_length, _) = new_input_embeds.shape().dims2()?;

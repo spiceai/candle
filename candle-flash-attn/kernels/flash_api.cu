@@ -45,7 +45,6 @@ extern "C" void run_mha(
     uint32_t d,
     uint32_t d_rounded,
     float softmax_scale,
-    float softcap,
 
     uint32_t seqlen_q,
     uint32_t seqlen_k,
@@ -54,9 +53,12 @@ extern "C" void run_mha(
 
     int is_bf16,
     int is_causal,
+    int unpadded_lse,
 
     int window_size_left,
-    int window_size_right
+    int window_size_right,
+
+    float softcap
 ) {
     Flash_fwd_params params;
     // Reset the parameters
@@ -102,9 +104,9 @@ extern "C" void run_mha(
     // Set the different scale values.
     if (softcap > 0.0) {
         params.softcap = softmax_scale / softcap;
-        params.scale_softmax =  softcap;
+        params.scale_softmax = softcap;
         params.scale_softmax_log2 = softcap * M_LOG2E;
-    }else{
+    } else {
         // Remove potential NaN
         params.softcap = 0.0;
         params.scale_softmax = softmax_scale;
@@ -127,6 +129,7 @@ extern "C" void run_mha(
 
     params.is_seqlens_k_cumulative = true;
     params.num_splits = 1;
+    params.unpadded_lse = unpadded_lse;
 
     cudaStream_t stream = 0; // Use the default stream.
     run_mha_fwd(params, stream);

@@ -92,7 +92,7 @@ impl candle::CustomOp1 for Sigmoid {
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::backend::BackendStorage;
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig, ValidAsZeroBits,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg, ValidAsZeroBits,
         };
         use candle::cuda_backend::SlicePtrOrNull;
         use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
@@ -112,13 +112,17 @@ impl candle::CustomOp1 for Sigmoid {
                 let cfg = LaunchConfig::for_num_elems(el_count as u32);
                 let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
                 let src = &src.slice(layout.start_offset()..);
-                let func = dev.get_or_load_func(&kernel_name::<T>("usigmoid"), kernels::UNARY)?;
+                let func = dev.get_or_load_func(&kernel_name::<T>("usigmoid"), &kernels::UNARY)?;
                 // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
+                let out = unsafe { dev.alloc::<T>(el_count)? };
 
-                let params = (el_count, dims.len(), &ds, src, &out);
+                let mut builder = func.builder();
+                candle::builder_arg!(builder, el_count, dims.len());
+                ds.builder_arg(&mut builder);
+                builder.arg(src);
+                builder.arg(&out);
                 // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }.w()?;
+                unsafe { builder.launch(cfg) }.w()?;
                 Ok(out)
             }
         }
@@ -145,8 +149,8 @@ impl candle::CustomOp1 for Sigmoid {
         let shape = layout.shape();
         let el_count = shape.elem_count();
         let buffer = device.new_buffer(el_count, dtype, "sigmoid")?;
-        let command_buffer = device.command_buffer()?;
-        command_buffer.set_label("sigmoid");
+        let encoder = device.command_encoder()?;
+        encoder.set_label("sigmoid");
         let src = candle_metal_kernels::BufferOffset {
             buffer: storage.buffer(),
             offset_in_bytes: layout.start_offset() * storage.dtype().size_in_bytes(),
@@ -167,7 +171,7 @@ impl candle::CustomOp1 for Sigmoid {
                 };
                 candle_metal_kernels::call_unary_contiguous_tiled(
                     device.metal_device(),
-                    &command_buffer,
+                    &encoder,
                     device.kernels(),
                     kernel_name,
                     el_count,
@@ -188,7 +192,7 @@ impl candle::CustomOp1 for Sigmoid {
                 };
                 candle_metal_kernels::call_unary_contiguous(
                     device.metal_device(),
-                    &command_buffer,
+                    &encoder,
                     device.kernels(),
                     kernel_name,
                     el_count,
@@ -210,7 +214,7 @@ impl candle::CustomOp1 for Sigmoid {
                 let dst = candle_metal_kernels::BufferOffset::zero_offset(&buffer);
                 candle_metal_kernels::call_unary_strided(
                     device.metal_device(),
-                    &command_buffer,
+                    &encoder,
                     device.kernels(),
                     kernel_name,
                     layout.dims(),
@@ -242,9 +246,22 @@ pub fn hard_sigmoid(xs: &Tensor) -> Result<Tensor> {
     ((xs + 3.0)? / 6.0)?.clamp(0f32, 1f32)
 }
 
+pub fn mish(xs: &Tensor) -> Result<Tensor> {
+    xs * (1.0 + xs.exp()?)?.log()?.tanh()
+}
+
 pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
     let zeros = xs.zeros_like()?;
     xs.maximum(&zeros)? + xs.minimum(&zeros)? * negative_slope
+}
+
+pub fn selu(xs: &Tensor, alpha: f32, gamma: f32) -> Result<Tensor> {
+    let is_pos = xs.gt(0f32)?;
+    let alpha_t = Tensor::full(alpha, xs.dims(), xs.device())?;
+    let neg = xs.exp()?.mul(&alpha_t)?.sub(&alpha_t)?;
+    let selu = is_pos.where_cond(xs, &neg)?;
+    let gamma_t = Tensor::full(gamma, xs.dims(), xs.device())?;
+    selu.broadcast_mul(&gamma_t)
 }
 
 pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {
@@ -465,7 +482,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         layout: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -492,12 +509,15 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                     block_dim: (1, 32, 1),
                     shared_mem_bytes: 0,
                 };
-                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), kernels::REDUCE)?;
+                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), &kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
-                let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (&src, &dst, n_cols as i32);
+                let dst = unsafe { dev.alloc::<T>(el)? };
+                let mut builder = func.builder();
+                builder.arg(&src);
+                builder.arg(&dst);
+                candle::builder_arg!(builder, n_cols as i32);
                 // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }.w()?;
+                unsafe { builder.launch(cfg) }.w()?;
                 Ok(dst)
             }
         }
@@ -520,7 +540,8 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = storage.device();
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("softmax");
         let kernels = device.kernels();
         let name = match storage.dtype() {
             DType::F32 => "softmax_f32",
@@ -539,7 +560,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
         candle_metal_kernels::call_last_softmax(
             device.metal_device(),
-            &command_buffer,
+            &encoder,
             kernels,
             name,
             elem_count,
@@ -1066,7 +1087,7 @@ impl candle::CustomOp2 for RmsNorm {
         l2: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, Map2, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -1102,19 +1123,16 @@ impl candle::CustomOp2 for RmsNorm {
                     block_dim: (block_size, 1, 1),
                     shared_mem_bytes: 0,
                 };
-                let func = dev.get_or_load_func(&kernel_name::<T>("rmsnorm"), kernels::REDUCE)?;
+                let func = dev.get_or_load_func(&kernel_name::<T>("rmsnorm"), &kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
-                let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (
-                    &src,
-                    &dst,
-                    &alpha,
-                    n_cols as i32,
-                    block_size as i32,
-                    self.eps,
-                );
+                let dst = unsafe { dev.alloc::<T>(el)? };
+                let mut builder = func.builder();
+                builder.arg(&src);
+                builder.arg(&dst);
+                builder.arg(&alpha);
+                candle::builder_arg!(builder, n_cols as i32, block_size as i32, self.eps);
                 // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }.w()?;
+                unsafe { builder.launch(cfg) }.w()?;
                 Ok(dst)
             }
         }
@@ -1139,7 +1157,8 @@ impl candle::CustomOp2 for RmsNorm {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = s1.device();
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("rmsnorm");
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype()) {
             (DType::F32, DType::F32) => "rmsnorm_f32",
@@ -1157,7 +1176,7 @@ impl candle::CustomOp2 for RmsNorm {
         let output = device.new_buffer(elem_count, s1.dtype(), "rmsnorm")?;
         candle_metal_kernels::call_rms_norm(
             device.metal_device(),
-            &command_buffer,
+            &encoder,
             kernels,
             name,
             elem_count,
@@ -1301,7 +1320,7 @@ impl candle::CustomOp3 for LayerNorm {
         l3: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, Map3, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -1343,20 +1362,18 @@ impl candle::CustomOp3 for LayerNorm {
                     block_dim: (block_size, 1, 1),
                     shared_mem_bytes: 0,
                 };
-                let func = dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::REDUCE)?;
+                let func =
+                    dev.get_or_load_func(&kernel_name::<T>("layernorm"), &kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
-                let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (
-                    &src,
-                    &dst,
-                    &alpha,
-                    &beta,
-                    n_cols as i32,
-                    block_size as i32,
-                    self.eps,
-                );
+                let dst = unsafe { dev.alloc::<T>(el)? };
+                let mut builder = func.builder();
+                builder.arg(&src);
+                builder.arg(&dst);
+                builder.arg(&alpha);
+                builder.arg(&beta);
+                candle::builder_arg!(builder, n_cols as i32, block_size as i32, self.eps);
                 // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }.w()?;
+                unsafe { builder.launch(cfg) }.w()?;
                 Ok(dst)
             }
         }
@@ -1383,7 +1400,8 @@ impl candle::CustomOp3 for LayerNorm {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = s1.device();
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("layernorm");
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype(), s3.dtype()) {
             (DType::F32, DType::F32, DType::F32) => "layernorm_f32",
@@ -1403,7 +1421,7 @@ impl candle::CustomOp3 for LayerNorm {
         let output = device.new_buffer(elem_count, s1.dtype(), "layernorm")?;
         candle_metal_kernels::call_layer_norm(
             device.metal_device(),
-            &command_buffer,
+            &encoder,
             kernels,
             name,
             elem_count,
@@ -1651,7 +1669,7 @@ impl candle::CustomOp3 for Sdpa {
             other => candle::bail!("unsupported sdpa type {other:?}"),
         };
 
-        let command_buffer = q.device().command_buffer()?;
+        let encoder = q.device().command_encoder()?;
         if supports_sdpa_vector {
             // Route to the 2 pass fused attention if the k seqlen is large.
             // https://github.com/ml-explore/mlx/pull/1597
@@ -1680,10 +1698,10 @@ impl candle::CustomOp3 for Sdpa {
                     "sdpa_2pass_maxs",
                 )?;
 
-                command_buffer.set_label("vector_attention");
+                encoder.set_label("vector_attention");
                 candle_metal_kernels::call_sdpa_vector_2pass(
                     q.device().device(),
-                    &command_buffer,
+                    &encoder,
                     q.device().kernels(),
                     q_l.start_offset(),
                     q_l.dims(),
@@ -1705,10 +1723,10 @@ impl candle::CustomOp3 for Sdpa {
                 )
                 .map_err(candle::Error::wrap)?;
             } else {
-                command_buffer.set_label("vector_attention");
+                encoder.set_label("vector_attention");
                 candle_metal_kernels::call_sdpa_vector(
                     q.device().device(),
-                    &command_buffer,
+                    &encoder,
                     q.device().kernels(),
                     q_l.start_offset(),
                     q_l.dims(),
@@ -1728,7 +1746,12 @@ impl candle::CustomOp3 for Sdpa {
                 .map_err(candle::Error::wrap)?;
             }
         } else if supports_sdpa_full {
-            command_buffer.set_label("full_attention");
+            if q_l.dim(2)? != k_l.dim(2)? {
+                candle::bail!(
+                    "query and key sequence length must be equal if using full metal sdpa"
+                );
+            }
+            encoder.set_label("full_attention");
             if self.softcapping != 1. {
                 candle::bail!("SDPA full requires softcapping to be disabled (1.0)");
             }
@@ -1772,7 +1795,7 @@ impl candle::CustomOp3 for Sdpa {
 
             candle_metal_kernels::call_sdpa_full(
                 q.device().device(),
-                &command_buffer,
+                &encoder,
                 q.device().kernels(),
                 q_l.start_offset(),
                 q_l.dims(),

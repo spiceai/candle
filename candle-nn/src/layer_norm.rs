@@ -170,6 +170,15 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     })
 }
 
+pub fn layer_norm_no_bias(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<LayerNorm> {
+    let config = LayerNormConfig {
+        eps,
+        remove_mean: true,
+        affine: false,
+    };
+    layer_norm(size, config, vb)
+}
+
 // This whole non quantized/quantized RmsNorm is a hack. It seems like quantized works without this impl, but it is slower.
 #[derive(Clone, Debug)]
 pub struct RmsNormQuantized;

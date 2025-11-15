@@ -1,3 +1,5 @@
+//! Traits and methods for CPU-backed Tensors
+
 pub mod erf;
 pub mod kernels;
 
@@ -58,10 +60,10 @@ trait CpuBF16<const ARR: usize> {
 use half::{bf16, f16};
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[cfg(target_feature = "avx")]
+#[cfg(target_feature = "avx2")]
 pub mod avx;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[cfg(target_feature = "avx")]
+#[cfg(target_feature = "avx2")]
 pub use avx::{CurrentCpu, CurrentCpuBF16, CurrentCpuF16};
 
 #[cfg(target_arch = "wasm32")]
@@ -80,7 +82,7 @@ pub use neon::CurrentCpu;
 
 #[cfg(any(
     target_feature = "neon",
-    target_feature = "avx",
+    target_feature = "avx2",
     target_feature = "simd128"
 ))]
 #[inline(always)]
@@ -110,7 +112,7 @@ pub(crate) unsafe fn vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f
 
 #[cfg(not(any(
     target_feature = "neon",
-    target_feature = "avx",
+    target_feature = "avx2",
     target_feature = "simd128"
 )))]
 #[inline(always)]
@@ -123,7 +125,7 @@ pub(crate) unsafe fn vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f
 
 #[cfg(any(
     target_feature = "neon",
-    target_feature = "avx",
+    target_feature = "avx2",
     target_feature = "simd128"
 ))]
 #[inline(always)]
@@ -150,7 +152,7 @@ pub(crate) unsafe fn vec_sum(row: *const f32, b: *mut f32, k: usize) {
 
 #[cfg(not(any(
     target_feature = "neon",
-    target_feature = "avx",
+    target_feature = "avx2",
     target_feature = "simd128"
 )))]
 #[inline(always)]
@@ -161,7 +163,7 @@ pub(crate) unsafe fn vec_sum(row: *const f32, b: *mut f32, k: usize) {
     }
 }
 
-#[cfg(target_feature = "avx")]
+#[cfg(target_feature = "avx2")]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f32, k: usize) {
     let mut sumf = 0.0f32;
@@ -189,7 +191,7 @@ pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     *c = sumf;
 }
 
-#[cfg(target_feature = "avx")]
+#[cfg(target_feature = "avx2")]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut f32, k: usize) {
     let mut sumf = 0.0f32;
@@ -217,7 +219,7 @@ pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
     *c = sumf;
 }
 
-#[cfg(not(target_feature = "avx"))]
+#[cfg(not(target_feature = "avx2"))]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f32, k: usize) {
     // leftovers
@@ -228,7 +230,7 @@ pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     *c = sum;
 }
 
-#[cfg(not(target_feature = "avx"))]
+#[cfg(not(target_feature = "avx2"))]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut f32, k: usize) {
     // leftovers
