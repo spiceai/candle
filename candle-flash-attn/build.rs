@@ -90,61 +90,41 @@ fn main() -> Result<()> {
         .arg("--use_fast_math")
         .arg("--verbose");
 
-<<<<<<< HEAD
-    if let Ok(target) = std::env::var("TARGET") {
-        if target.contains("msvc") {
-            // https://github.com/EricLBuehler/mistral.rs/issues/941
-            builder = builder.arg("-D_USE_MATH_DEFINES");
-        }
-    }
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let is_target_msvc = target.contains("msvc");
+
+    // Ensure math constants like M_PI are defined when compiling with NVCC.
     // https://github.com/EricLBuehler/mistral.rs/issues/941
     builder = builder.arg("-D_USE_MATH_DEFINES");
 
+    // Allow passing additional compiler options through the environment.
     // https://github.com/EricLBuehler/mistral.rs/issues/286
-    // https://github.com/huggingface/candle-flash-attn-v1/pull/2
     if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
         builder = builder.arg("--compiler-options");
         builder = builder.arg(cuda_nvcc_flags_env);
-=======
-    let mut is_target_msvc = false;
-    if let Ok(target) = std::env::var("TARGET") {
-        if target.contains("msvc") {
-            is_target_msvc = true;
-            builder = builder.arg("-D_USE_MATH_DEFINES");
-        }
     }
 
     if !is_target_msvc {
         builder = builder.arg("-Xcompiler").arg("-fPIC");
->>>>>>> main
     }
 
     let out_file = build_dir.join("libflashattention.a");
     builder.build_lib(out_file);
 
-<<<<<<< HEAD
-    println!("cargo:rustc-link-search={}", build_dir.display());
-    println!("cargo:rustc-link-lib=flashattention");
-    println!("cargo:rustc-link-lib=dylib=cudart");
-    // https://github.com/denoland/rusty_v8/blob/20b2989186d1ecdf4c291d0706ff9eb1baaf2cfd/build.rs#L602
-    let target = std::env::var("TARGET").unwrap();
-    if target.contains("msvc") {
-        // nothing to link to
-    } else if target.contains("apple") || target.contains("freebsd") || target.contains("openbsd") {
-        println!("cargo:rustc-link-lib=dylib=c++");
-    } else if target.contains("android") {
-        println!("cargo:rustc-link-lib=dylib=c++_shared");
-    } else {
-        println!("cargo:rustc-link-lib=dylib=stdc++");
-    }
-
-=======
     println!("cargo::rustc-link-search={}", build_dir.display());
     println!("cargo::rustc-link-lib=flashattention");
     println!("cargo::rustc-link-lib=dylib=cudart");
-    if !is_target_msvc {
-        println!("cargo::rustc-link-lib=dylib=stdc++");
+    if is_target_msvc {
+        // MSVC toolchains link C++ runtime implicitly.
+    } else if target.contains("apple")
+        || target.contains("freebsd")
+        || target.contains("openbsd")
+    {
+    println!("cargo::rustc-link-lib=dylib=c++");
+    } else if target.contains("android") {
+    println!("cargo::rustc-link-lib=dylib=c++_shared");
+    } else {
+    println!("cargo::rustc-link-lib=dylib=stdc++");
     }
->>>>>>> main
     Ok(())
 }

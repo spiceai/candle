@@ -25,10 +25,6 @@ __device__ void cast_(
     }
 }
 
-<<<<<<< HEAD
-#if __CUDA_ARCH__ >= 800
-=======
->>>>>>> main
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
 template <typename T>
@@ -75,10 +71,6 @@ __device__ void cast_fp8_into_(
         }
     }
 }
-<<<<<<< HEAD
-#endif
-=======
->>>>>>> main
 
 template <typename S, typename T, typename I>
 __device__ void cast_through(
@@ -125,6 +117,7 @@ __device__ void cast_bf16_dummy(
         }
     }
 }
+
 
 #define CAST_OP(SRC_TYPENAME, DST_TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME( \
@@ -184,8 +177,6 @@ extern "C" __global__ void FN_NAME( \
 } \
 
 #if __CUDA_ARCH__ >= 800
-#include "cuda_fp8.h"
-#include "cuda_bf16.h"
 CAST_OP(__nv_bfloat16, __nv_bfloat16, cast_bf16_bf16)
 CAST_OP(__nv_fp8_e4m3, __nv_fp8_e4m3, cast_f8_e4m3_f8_e4m3)
 
@@ -199,11 +190,8 @@ CAST_OP(double,   __nv_bfloat16, cast_f64_bf16)
 CAST_THROUGH_OP(__nv_bfloat16, uint8_t, float, cast_bf16_u8)
 CAST_THROUGH_OP(__nv_bfloat16, __half,   float, cast_bf16_f16)
 CAST_THROUGH_OP(__half,   __nv_bfloat16, float, cast_f16_bf16)
-<<<<<<< HEAD
 CAST_THROUGH_OP(int32_t,   __nv_bfloat16, float, cast_i32_bf16)
 CAST_THROUGH_OP(__nv_bfloat16, int32_t, float, cast_bf16_i32)
-=======
->>>>>>> main
 
 CAST_OP_FP8(__nv_fp8_e4m3, float,    cast_f8_e4m3_f32)
 CAST_OP_FP8_INTO(float,    __nv_fp8_e4m3, cast_f32_f8_e4m3)
@@ -217,8 +205,6 @@ CAST_OP_FP8_INTO(int32_t,   __nv_fp8_e4m3, cast_i32_f8_e4m3)
 CAST_OP_FP8(__nv_fp8_e4m3, int32_t, cast_f8_e4m3_i32)
 CAST_OP_FP8(__nv_fp8_e4m3, __nv_bfloat16, cast_f8_e4m3_bf16)
 CAST_OP_FP8_INTO(__nv_bfloat16, __nv_fp8_e4m3, cast_bf16_f8_e4m3)
-<<<<<<< HEAD
-=======
 #else
 #include <cuda.h>
 #if CUDA_VERSION >= 11000
@@ -232,7 +218,6 @@ CAST_THROUGH_OP(double,   __nv_bfloat16, float, cast_f64_bf16)
 CAST_THROUGH_OP(uint8_t,   __nv_bfloat16, float, cast_u8_bf16)
 CAST_THROUGH_OP(__nv_bfloat16, __nv_fp8_e4m3, float, cast_bf16_f8_e4m3)
 #endif
->>>>>>> main
 #endif
 
 #if __CUDA_ARCH__ >= 530
@@ -261,55 +246,29 @@ CAST_BF16_FALLBACK_OP(int32_t, cast_bf16_i32)
 CAST_OP(uint32_t, uint32_t, cast_u32_u32)
 CAST_OP(uint32_t, uint8_t,  cast_u32_u8 )
 CAST_OP(uint32_t, int64_t,  cast_u32_i64 )
-CAST_OP(uint32_t, int32_t,  cast_u32_i32 )
-CAST_OP(uint32_t, int16_t,  cast_u32_i16 )
 CAST_OP(uint32_t, float,    cast_u32_f32)
 CAST_OP(uint32_t, double,   cast_u32_f64)
 
 CAST_OP(uint8_t, uint32_t, cast_u8_u32)
 CAST_OP(uint8_t, uint8_t,  cast_u8_u8 )
-CAST_OP(uint8_t, int16_t,  cast_u8_i16 )
-CAST_OP(uint8_t, int32_t,  cast_u8_i32 )
 CAST_OP(uint8_t, int64_t,  cast_u8_i64 )
 CAST_OP(uint8_t, float,    cast_u8_f32)
 CAST_OP(uint8_t, double,   cast_u8_f64)
 
 CAST_OP(int64_t, uint32_t, cast_i64_u32)
 CAST_OP(int64_t, uint8_t,  cast_i64_u8 )
-CAST_OP(int64_t, int16_t,  cast_i64_i16 )
-CAST_OP(int64_t, int32_t,  cast_i64_i32 )
 CAST_OP(int64_t, int64_t,  cast_i64_i64 )
 CAST_OP(int64_t, float,    cast_i64_f32)
 CAST_OP(int64_t, double,   cast_i64_f64)
 
-CAST_OP(int32_t, uint32_t, cast_i32_u32)
-CAST_OP(int32_t, uint8_t,  cast_i32_u8 )
-CAST_OP(int32_t, int64_t,  cast_i32_i64 )
-CAST_OP(int32_t, int32_t,  cast_i32_i32 )
-CAST_OP(int32_t, int16_t,  cast_i32_i16 )
-CAST_OP(int32_t, float,    cast_i32_f32)
-CAST_OP(int32_t, double,   cast_i32_f64)
-
-CAST_OP(int16_t, uint32_t, cast_i16_u32)
-CAST_OP(int16_t, uint8_t,  cast_i16_u8 )
-CAST_OP(int16_t, int64_t,  cast_i16_i64 )
-CAST_OP(int16_t, int32_t,  cast_i16_i32 )
-CAST_OP(int16_t, int16_t,  cast_i16_i16 )
-CAST_OP(int16_t, float,    cast_i16_f32)
-CAST_OP(int16_t, double,   cast_i16_f64)
-
 CAST_OP(float, uint8_t,  cast_f32_u8 )
 CAST_OP(float, uint32_t, cast_f32_u32)
-CAST_OP(float, int16_t,  cast_f32_i16 )
-CAST_OP(float, int32_t,  cast_f32_i32 )
 CAST_OP(float, int64_t,  cast_f32_i64 )
 CAST_OP(float, float,    cast_f32_f32)
 CAST_OP(float, double,   cast_f32_f64)
 
 CAST_OP(double, uint8_t,  cast_f64_u8 )
 CAST_OP(double, uint32_t, cast_f64_u32)
-CAST_OP(double, int16_t,  cast_f64_i16 )
-CAST_OP(double, int32_t,  cast_f64_i32 )
 CAST_OP(double, int64_t,  cast_f64_i64 )
 CAST_OP(double, float,    cast_f64_f32)
 CAST_OP(double, double,   cast_f64_f64)

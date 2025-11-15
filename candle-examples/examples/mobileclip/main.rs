@@ -129,13 +129,7 @@ pub fn main() -> anyhow::Result<()> {
     let softmax_image = softmax(&logits_per_image, 1)?;
 
     let softmax_image_vec = softmax_image.flatten_all()?.to_vec1::<f32>()?;
-<<<<<<< HEAD
-
-    println!("softmax_image_vec: {:?}", softmax_image_vec);
-
-=======
     println!("softmax_image_vec: {softmax_image_vec:?}");
->>>>>>> main
     let probability_vec = softmax_image_vec
         .iter()
         .map(|v| v * 100.0)

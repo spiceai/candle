@@ -45,7 +45,6 @@ extern "C" void run_mha(
     uint32_t d,
     uint32_t d_rounded,
     float softmax_scale,
-    float softcap,
 
     uint32_t seqlen_q,
     uint32_t seqlen_k,
@@ -105,15 +104,9 @@ extern "C" void run_mha(
     // Set the different scale values.
     if (softcap > 0.0) {
         params.softcap = softmax_scale / softcap;
-<<<<<<< HEAD
-        params.scale_softmax =  softcap;
-        params.scale_softmax_log2 = softcap * M_LOG2E;
-    }else{
-=======
         params.scale_softmax = softcap;
         params.scale_softmax_log2 = softcap * M_LOG2E;
-    } else{
->>>>>>> main
+    } else {
         // Remove potential NaN
         params.softcap = 0.0;
         params.scale_softmax = softmax_scale;

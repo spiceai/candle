@@ -1,21 +1,13 @@
-<<<<<<< HEAD
+use std::env;
+use std::path::PathBuf;
+
 fn main() {
-    std::env::set_var("NVCC_PREPEND_FLAGS", "-D_USE_MATH_DEFINES");
+    env::set_var("NVCC_PREPEND_FLAGS", "-D_USE_MATH_DEFINES");
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/compatibility.cuh");
     println!("cargo:rerun-if-changed=src/cuda_utils.cuh");
     println!("cargo:rerun-if-changed=src/binary_op_macros.cuh");
-=======
-use std::env;
-use std::path::PathBuf;
->>>>>>> main
-
-fn main() {
-    println!("cargo::rerun-if-changed=build.rs");
-    println!("cargo::rerun-if-changed=src/compatibility.cuh");
-    println!("cargo::rerun-if-changed=src/cuda_utils.cuh");
-    println!("cargo::rerun-if-changed=src/binary_op_macros.cuh");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");

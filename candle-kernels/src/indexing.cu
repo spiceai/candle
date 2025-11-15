@@ -146,11 +146,7 @@ __device__ void index_add(
       }
 }
 
-<<<<<<< HEAD
-#if __CUDA_ARCH__ >= 800
-=======
 #if __CUDA_ARCH__ >= 890
->>>>>>> main
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
 template<typename I>
@@ -225,8 +221,6 @@ extern "C" __global__ void FN_NAME(  \
     const size_t right_size \
 ) { index_add_f8(ids, ids_dim_size, inp, out, left_size, src_dim_size, dst_dim_size, right_size); } \
 
-<<<<<<< HEAD
-=======
 template<typename T, typename I>
 __device__ void scatter(
     const I *ids,
@@ -253,7 +247,6 @@ __device__ void scatter(
       }
 }
 
->>>>>>> main
 template<typename T, typename I>
 __device__ void scatter_add(
     const I *ids,
@@ -338,16 +331,12 @@ SA_OP(__nv_bfloat16, int32_t, sa_i32_bf16)
 SA_OP(__nv_bfloat16, int64_t, sa_i64_bf16)
 SA_OP(__nv_bfloat16, uint32_t, sa_u32_bf16)
 SA_OP(__nv_bfloat16, uint8_t, sa_u8_bf16)
-<<<<<<< HEAD
-
-=======
 S_OP(__nv_bfloat16, int64_t, s_i64_bf16)
 S_OP(__nv_bfloat16, uint32_t, s_u32_bf16)
 S_OP(__nv_bfloat16, uint8_t, s_u8_bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 890
->>>>>>> main
 IS_OP(__nv_fp8_e4m3, int16_t, is_i16_f8_e4m3)
 IS_OP(__nv_fp8_e4m3, int32_t, is_i32_f8_e4m3)
 IS_OP(__nv_fp8_e4m3, int64_t, is_i64_f8_e4m3)

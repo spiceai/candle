@@ -2,10 +2,6 @@ mod ffi;
 
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
-<<<<<<< HEAD
-use candle::cuda_backend::WrapErr;
-=======
->>>>>>> main
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 
@@ -58,11 +54,7 @@ impl FlashAttn {
 
         if q_rank != 4 || k_rank != 4 || v_rank != 4 {
             candle::bail!(
-<<<<<<< HEAD
-                "flash-attn expects input tensors of rank 4 (q: {q_rank}, k: {k_rank}, v: {v_rank}"
-=======
                 "flash-attn-v3 expects input tensors of rank 4 (q: {q_rank}, k: {k_rank}, v: {v_rank}"
->>>>>>> main
             )
         }
         if q_stride[q_rank - 1] != 1 {
@@ -102,10 +94,7 @@ impl FlashAttn {
             _ => 0,
         };
 
-<<<<<<< HEAD
-=======
         let stream = dev.cuda_stream();
->>>>>>> main
         let alibi_slopes_ptr = if let Some(alibi_slopes) = &self.alibi_slopes {
             if alibi_slopes.dtype() != DType::F32 {
                 candle::bail!(
@@ -132,13 +121,9 @@ impl FlashAttn {
 
             let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
 
-<<<<<<< HEAD
-            *alibi_slopes.device_ptr() as *const core::ffi::c_void
-=======
             // Dropping the guard here doesn't seem very safe.
             let (ptr, _guard) = alibi_slopes.device_ptr(&stream);
             ptr as *const core::ffi::c_void
->>>>>>> main
         } else {
             std::ptr::null()
         };
@@ -163,15 +148,8 @@ impl FlashAttn {
         let seqlen_k_rounded = round_multiple(seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-<<<<<<< HEAD
-        let dst = unsafe { dev.alloc::<T>(elem_count) }.w()?;
-        let softmax_lse = dev
-            .alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)
-            .w()?;
-=======
         let dst = unsafe { dev.alloc::<T>(elem_count) }?;
         let softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
->>>>>>> main
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -190,19 +168,6 @@ impl FlashAttn {
         }
 
         unsafe {
-<<<<<<< HEAD
-            let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
-            let k_ptr = *k.device_ptr() as *const core::ffi::c_void;
-            let v_ptr = *v.device_ptr() as *const core::ffi::c_void;
-            let dst_ptr = *dst.device_ptr() as *const core::ffi::c_void;
-            let softmax_lse_ptr = *softmax_lse.device_ptr() as *const core::ffi::c_void;
-            ffi::run_mha(
-                q_ptr,
-                k_ptr,
-                v_ptr,
-                dst_ptr,
-                softmax_lse_ptr,
-=======
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
             let (v_ptr, _guard) = v.device_ptr(&stream);
@@ -214,7 +179,6 @@ impl FlashAttn {
                 v_ptr as *const core::ffi::c_void,
                 dst_ptr as *const core::ffi::c_void,
                 softmax_lse_ptr as *const core::ffi::c_void,
->>>>>>> main
                 /* alibi_slopes_ptr */ alibi_slopes_ptr,
                 /* cu_seqlens_q_ptr */ std::ptr::null(),
                 /* cu_seqlens_k_ptr */ std::ptr::null(),
@@ -259,11 +223,7 @@ impl FlashAttn {
 
 impl candle::CustomOp3 for FlashAttn {
     fn name(&self) -> &'static str {
-<<<<<<< HEAD
-        "flash-attn"
-=======
         "flash-attn-v3"
->>>>>>> main
     }
 
     fn cpu_fwd(
@@ -275,11 +235,7 @@ impl candle::CustomOp3 for FlashAttn {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-<<<<<<< HEAD
-        candle::bail!("no cpu support for flash-attn")
-=======
         candle::bail!("no cpu support for flash-attn-v3")
->>>>>>> main
     }
 
     fn cuda_fwd(
@@ -294,11 +250,7 @@ impl candle::CustomOp3 for FlashAttn {
         match q.dtype() {
             candle::DType::F16 => self.cuda_fwd_t::<f16>(q, q_l, k, k_l, v, v_l, false),
             candle::DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l, k, k_l, v, v_l, true),
-<<<<<<< HEAD
-            dt => candle::bail!("flash-attn is only supported for f16/bf16 ({dt:?})"),
-=======
             dt => candle::bail!("flash-attn-v3 is only supported for f16/bf16 ({dt:?})"),
->>>>>>> main
         }
     }
 }
@@ -526,11 +478,7 @@ impl FlashAttnVarLen {
 
         if q_rank != 3 || k_rank != 3 || v_rank != 3 {
             candle::bail!(
-<<<<<<< HEAD
-                "flash-attn-varlen expects input tensors of rank 3 (q: {q_rank}, k: {k_rank}, v: {v_rank}"
-=======
                 "flash-attn-v3-varlen expects input tensors of rank 3 (q: {q_rank}, k: {k_rank}, v: {v_rank}"
->>>>>>> main
             )
         }
         if q_stride[q_rank - 1] != 1 {
@@ -581,10 +529,7 @@ impl FlashAttnVarLen {
 
         let batch_size = nseqlens_q - 1;
 
-<<<<<<< HEAD
-=======
         let stream = dev.cuda_stream();
->>>>>>> main
         let alibi_slopes_ptr = if let Some(alibi_slopes) = &self.alibi_slopes {
             if alibi_slopes.dtype() != DType::F32 {
                 candle::bail!(
@@ -611,13 +556,9 @@ impl FlashAttnVarLen {
 
             let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
 
-<<<<<<< HEAD
-            *alibi_slopes.device_ptr() as *const core::ffi::c_void
-=======
             // Dropping the guard here doesn't seem very safe.
             let (ptr, _guard) = alibi_slopes.device_ptr(&stream);
             ptr as *const core::ffi::c_void
->>>>>>> main
         } else {
             std::ptr::null()
         };
@@ -648,13 +589,8 @@ impl FlashAttnVarLen {
         let seqlen_k_rounded = round_multiple(self.max_seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-<<<<<<< HEAD
-        let dst = unsafe { dev.alloc::<T>(elem_count) }.w()?;
-        let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q).w()?;
-=======
         let dst = unsafe { dev.alloc::<T>(elem_count) }?;
         let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
->>>>>>> main
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -672,24 +608,6 @@ impl FlashAttnVarLen {
             window_size_right = self.max_seqlen_k as i32;
         }
         unsafe {
-<<<<<<< HEAD
-            let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
-            let k_ptr = *k.device_ptr() as *const core::ffi::c_void;
-            let v_ptr = *v.device_ptr() as *const core::ffi::c_void;
-            let dst_ptr = *dst.device_ptr() as *const core::ffi::c_void;
-            let softmax_lse_ptr = *softmax_lse.device_ptr() as *const core::ffi::c_void;
-            let seqlens_q_ptr = *seqlens_q.device_ptr() as *const core::ffi::c_int;
-            let seqlens_k_ptr = *seqlens_k.device_ptr() as *const core::ffi::c_int;
-            ffi::run_mha(
-                q_ptr,
-                k_ptr,
-                v_ptr,
-                dst_ptr,
-                softmax_lse_ptr,
-                /* alibi_slopes_ptr */ alibi_slopes_ptr,
-                /* cu_seqlens_q_ptr */ seqlens_q_ptr,
-                /* cu_seqlens_k_ptr */ seqlens_k_ptr,
-=======
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
             let (v_ptr, _guard) = v.device_ptr(&stream);
@@ -706,7 +624,6 @@ impl FlashAttnVarLen {
                 /* alibi_slopes_ptr */ alibi_slopes_ptr,
                 /* cu_seqlens_q_ptr */ seqlens_q_ptr as *const i32,
                 /* cu_seqlens_k_ptr */ seqlens_k_ptr as *const i32,
->>>>>>> main
                 /* q_batch_stride */ 0,
                 /* k_batch_stride */ 0,
                 /* v_batch_stride */ 0,
@@ -748,11 +665,7 @@ impl FlashAttnVarLen {
 
 impl candle::CustomOp3 for FlashAttnVarLen {
     fn name(&self) -> &'static str {
-<<<<<<< HEAD
-        "flash-attn-varlen"
-=======
         "flash-attn-v3-varlen"
->>>>>>> main
     }
 
     fn cpu_fwd(
@@ -764,11 +677,7 @@ impl candle::CustomOp3 for FlashAttnVarLen {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-<<<<<<< HEAD
-        candle::bail!("no cpu support for flash-attn")
-=======
         candle::bail!("no cpu support for flash-attn-v3")
->>>>>>> main
     }
 
     fn cuda_fwd(
@@ -783,11 +692,7 @@ impl candle::CustomOp3 for FlashAttnVarLen {
         match q.dtype() {
             candle::DType::F16 => self.cuda_fwd_t::<f16>(q, q_l, k, k_l, v, v_l, false),
             candle::DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l, k, k_l, v, v_l, true),
-<<<<<<< HEAD
-            dt => candle::bail!("flash-attn is only supported for f16/bf16 ({dt:?})"),
-=======
             dt => candle::bail!("flash-attn-v3 is only supported for f16/bf16 ({dt:?})"),
->>>>>>> main
         }
     }
 }

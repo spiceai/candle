@@ -13,6 +13,7 @@ pub mod sdpa;
 pub mod sort;
 pub mod ternary;
 pub mod unary;
+pub mod mul_and_act;
 
 pub use affine::*;
 pub use binary::{call_binary_contiguous, call_binary_strided};
@@ -28,3 +29,4 @@ pub use sdpa::{call_sdpa_full, call_sdpa_vector, call_sdpa_vector_2pass, SdpaDTy
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
 pub use ternary::call_where_cond;
 pub use unary::*;
+pub use mul_and_act::{call_mul_and_act_contiguous, call_mul_and_act_strided};

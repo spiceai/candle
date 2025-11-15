@@ -227,113 +227,125 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 }
 
 template <typename T>
-<<<<<<< HEAD
-__device__ void attn_soft_max(const T * x, const T * mask, T * dst, const int ncols, const int nrows_y, const int elem_per_batch, const float scale) {
-    const int tid  = threadIdx.x;
-    const int rowx = blockIdx.x;
-    const int rowy = rowx % nrows_y; // broadcast the mask in the row dimension
+__device__ void attn_soft_max(
+  const T * x,
+  const T * mask,
+  T * dst,
+  const int ncols,
+  const int nrows_y,
+  const int elem_per_batch,
+  const float scale
+) {
+  const int tid = threadIdx.x;
+  const int rowx = blockIdx.x;
+  const int rowy = rowx % nrows_y; // broadcast the mask in the row dimension
 
-    const int block_size = blockDim.x;
+  const int block_size = blockDim.x;
 
-    const int warp_id = threadIdx.x / WARP_SIZE;
-    const int lane_id = threadIdx.x % WARP_SIZE;
+  const int warp_id = threadIdx.x / WARP_SIZE;
+  const int lane_id = threadIdx.x % WARP_SIZE;
 
-    extern __shared__ float smem[];
-    float * buf_iw = smem; // shared memory buffer for inter-warp communication
-    // shared memory buffer to cache values between iterations:
-    T * vals = dst + (int64_t)rowx*ncols;
+  extern __shared__ float smem[];
+  float *buf_iw = smem; // shared memory buffer for inter-warp communication
+  // shared memory buffer to cache values between iterations:
+  T *vals = dst + static_cast<int64_t>(rowx) * ncols;
 
-    float max_val = -INFINITY;
+  float max_val = -INFINITY;
 
 #pragma unroll
-    for (int col0 = 0; col0 < ncols; col0 += block_size) {
-        const int col = col0 + tid;
+  for (int col0 = 0; col0 < ncols; col0 += block_size) {
+    const int col = col0 + tid;
 
-        if (col >= ncols) {
-            break;
-        }
-
-        const int64_t ix = (int64_t)rowx*ncols + col;
-
-        const int64_t b_idx = elem_per_batch > 0 ? ix / elem_per_batch : 0;
-        const int64_t iy = (int64_t)b_idx * (ncols*nrows_y) + rowy*ncols + col;
-
-        const float val = float(x[ix]) * scale + (mask ? float(mask[iy]) : 0.0f);
-
-        vals[col] = val;
-        max_val = max(max_val, val);
+    if (col >= ncols) {
+      break;
     }
 
-    // find the max value in the block
+    const int64_t ix = static_cast<int64_t>(rowx) * ncols + col;
+
+    const int64_t b_idx = elem_per_batch > 0 ? ix / elem_per_batch : 0;
+    const int64_t iy = static_cast<int64_t>(b_idx) * (ncols * nrows_y) + rowy * ncols + col;
+
+    const float val = float(x[ix]) * scale + (mask ? float(mask[iy]) : 0.0f);
+
+    vals[col] = val;
+    max_val = max(max_val, val);
+  }
+
+  // find the max value in the block
+  max_val = warp_reduce_max(max_val);
+  if (block_size > WARP_SIZE) {
+    if (warp_id == 0) {
+      buf_iw[lane_id] = -INFINITY;
+    }
+    __syncthreads();
+
+    if (lane_id == 0) {
+      buf_iw[warp_id] = max_val;
+    }
+    __syncthreads();
+
+    max_val = buf_iw[lane_id];
     max_val = warp_reduce_max(max_val);
-    if (block_size > WARP_SIZE) {
-        if (warp_id == 0) {
-            buf_iw[lane_id] = -INFINITY;
-        }
-        __syncthreads();
+  }
 
-        if (lane_id == 0) {
-            buf_iw[warp_id] = max_val;
-        }
-        __syncthreads();
-
-        max_val = buf_iw[lane_id];
-        max_val = warp_reduce_max(max_val);
-    }
-
-    float tmp = 0.0f; // partial sum
+  float tmp = 0.0f; // partial sum
 
 #pragma unroll
-    for (int col0 = 0; col0 < ncols; col0 += block_size) {
-        const int col = col0 + tid;
+  for (int col0 = 0; col0 < ncols; col0 += block_size) {
+    const int col = col0 + tid;
 
-        if (col >= ncols) {
-            break;
-        }
-
-        const float val = expf(float(vals[col]) - max_val);
-        tmp += val;
-        vals[col] = val;
+    if (col >= ncols) {
+      break;
     }
 
-    // find the sum of exps in the block
+    const float val = expf(float(vals[col]) - max_val);
+    tmp += val;
+    vals[col] = val;
+  }
+
+  // find the sum of exps in the block
+  tmp = warp_reduce_sum(tmp);
+  if (block_size > WARP_SIZE) {
+    __syncthreads();
+    if (warp_id == 0) {
+      buf_iw[lane_id] = 0.0f;
+    }
+    __syncthreads();
+
+    if (lane_id == 0) {
+      buf_iw[warp_id] = tmp;
+    }
+    __syncthreads();
+
+    tmp = buf_iw[lane_id];
     tmp = warp_reduce_sum(tmp);
-    if (block_size > WARP_SIZE) {
-        __syncthreads();
-        if (warp_id == 0) {
-            buf_iw[lane_id] = 0.0f;
-        }
-        __syncthreads();
+  }
 
-        if (lane_id == 0) {
-            buf_iw[warp_id] = tmp;
-        }
-        __syncthreads();
-
-        tmp = buf_iw[lane_id];
-        tmp = warp_reduce_sum(tmp);
-    }
-
-    const float inv_sum = 1.0f / tmp;
+  const float inv_sum = 1.0f / tmp;
 
 #pragma unroll
-    for (int col0 = 0; col0 < ncols; col0 += block_size) {
-        const int col = col0 + tid;
+  for (int col0 = 0; col0 < ncols; col0 += block_size) {
+    const int col = col0 + tid;
 
-        if (col >= ncols) {
-            return;
-        }
-
-        const int64_t idst = (int64_t)rowx*ncols + col;
-        dst[idst] = float(vals[col]) * inv_sum;
+    if (col >= ncols) {
+      return;
     }
+
+    const int64_t idst = static_cast<int64_t>(rowx) * ncols + col;
+    dst[idst] = float(vals[col]) * inv_sum;
+  }
 }
 
 template <typename T>
-__device__ void ropei(const T * src, const T * cos, const T * sin, T * dst, const uint32_t bh, const uint32_t td) {
-=======
-__device__ void ropei(const T * src, const T * cos, const T * sin, T * dst, const uint32_t bh, const uint32_t td, const uint32_t stride_b) {
->>>>>>> main
+__device__ void ropei(
+  const T * src,
+  const T * cos,
+  const T * sin,
+  T * dst,
+  const uint32_t bh,
+  const uint32_t td,
+  const uint32_t stride_b
+) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (2 * idx >= bh * td) return;
 

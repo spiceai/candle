@@ -1743,6 +1743,11 @@ impl candle::CustomOp3 for Sdpa {
                 .map_err(candle::Error::wrap)?;
             }
         } else if supports_sdpa_full {
+            if q_l.dim(2)? != k_l.dim(2)? {
+                candle::bail!(
+                    "query and key sequence length must be equal if using full metal sdpa"
+                );
+            }
             command_buffer.set_label("full_attention");
             if self.softcapping != 1. {
                 candle::bail!("SDPA full requires softcapping to be disabled (1.0)");

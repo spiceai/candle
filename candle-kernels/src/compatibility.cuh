@@ -1,9 +1,6 @@
 #include "cuda_fp16.h"
-<<<<<<< HEAD
-=======
 #include "cuda_bf16.h"
 #include "cuda_fp8.h"
->>>>>>> main
 
 // Table showing which features are supported on which compute capability
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/#features-and-technical-specifications

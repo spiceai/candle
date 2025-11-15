@@ -1,11 +1,6 @@
 use anyhow::Result;
-<<<<<<< HEAD
-use candle::{DType, Device, IndexOp, Tensor, D};
-use baseten_candle_flash_attn_v3;
-=======
 use candle_flash_attn_v3;
 use candle::{DType, Device, IndexOp, Tensor, D};
->>>>>>> main
 use rstest::rstest;
 
 fn to_vec3_round(t: Tensor, digits: i32) -> Result<Vec<Vec<Vec<f32>>>> {
@@ -50,11 +45,7 @@ fn flash_attn_acausal() -> Result<()> {
         let q = q.transpose(1, 2)?;
         let k = k.transpose(1, 2)?;
         let v = v.transpose(1, 2)?;
-<<<<<<< HEAD
-        baseten_candle_flash_attn_v3::flash_attn(&q, &k, &v, 0.5, false, false)?.transpose(1, 2)?
-=======
         candle_flash_attn_v3::flash_attn(&q, &k, &v, 0.5, false, false)?.transpose(1, 2)?
->>>>>>> main
     };
     let ys2 = ys2.i(0)?.to_dtype(DType::F32)?;
     let diff = ys1.sub(&ys2)?.abs()?.flatten_all()?.max(0)?;
@@ -158,12 +149,8 @@ fn flash_attn_acausal_gqa() -> Result<()> {
         let q = q.transpose(1, 2)?;
         let k_gqa = k_gqa.transpose(1, 2)?;
         let v_gqa = v_gqa.transpose(1, 2)?;
-<<<<<<< HEAD
-        baseten_candle_flash_attn_v3::flash_attn(&q, &k_gqa, &v_gqa, 0.125, false, true)?.transpose(1, 2)?
-=======
         candle_flash_attn_v3::flash_attn(&q, &k_gqa, &v_gqa, 0.125, false, true)?
             .transpose(1, 2)?
->>>>>>> main
     };
     let ys2 = ys2.i(0)?.to_dtype(DType::F32)?;
     assert_eq!(ys2.dims(), &[n_h, 2, 64]);
@@ -273,11 +260,7 @@ fn flash_attn_varlen() -> Result<()> {
         let q = q.transpose(0, 1)?;
         let k = k.transpose(0, 1)?;
         let v = v.transpose(0, 1)?;
-<<<<<<< HEAD
-        baseten_candle_flash_attn_v3::flash_attn_varlen(
-=======
         candle_flash_attn_v3::flash_attn_varlen(
->>>>>>> main
             &q, &k, &v, &seqlens_q, &seqlens_q, 2, 2, 0.5, false, false,
         )?
         .transpose(0, 1)?
@@ -380,11 +363,7 @@ fn flash_attn_varlen_param(head_dim: usize, seq_len: usize, use_gqa_packing: boo
         let q = q.transpose(0, 1)?;
         let k = k.transpose(0, 1)?;
         let v = v.transpose(0, 1)?;
-<<<<<<< HEAD
-        baseten_candle_flash_attn_v3::flash_attn_varlen(
-=======
         candle_flash_attn_v3::flash_attn_varlen(
->>>>>>> main
             &q,
             &k,
             &v,
