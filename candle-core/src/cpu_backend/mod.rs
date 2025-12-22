@@ -2475,14 +2475,28 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn matmul(
+    fn matmul_with_alpha(
         &self,
         rhs: &Self,
+        _alpha: Option<f64>,
         bmnk: (usize, usize, usize, usize),
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
+    }
+
+    fn matmul_with_alpha_beta(
+        &self,
+        _rhs: &Self,
+        _c: &mut Self,
+        _alpha: Option<f64>,
+        _bmnk: (usize, usize, usize, usize),
+        _lhs_l: &Layout,
+        _rhs_l: &Layout,
+        _c_l: &Layout,
+    ) -> Result<()> {
+        crate::bail!("matmul_with_alpha_beta not implemented for CPU backend")
     }
 
     fn device(&self) -> &Self::Device {
@@ -2750,6 +2764,11 @@ impl BackendDevice for CpuDevice {
             DType::F64 => CpuStorage::F64(vec![0f64; elem_count]),
         };
         Ok(storage)
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
+        // CPU backend doesn't maintain a seed state
+        Ok(0)
     }
 
     fn synchronize(&self) -> Result<()> {

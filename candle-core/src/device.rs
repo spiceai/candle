@@ -267,15 +267,6 @@ impl Device {
         }
     }
 
-    /// Get the current seed for the device RNG.
-    pub fn get_current_seed(&self) -> Result<u64> {
-        match self {
-            Self::Cpu => CpuDevice.get_current_seed(),
-            Self::Cuda(c) => c.get_current_seed(),
-            Self::Metal(m) => m.get_current_seed(),
-        }
-    }
-
     pub fn same_device(&self, rhs: &Self) -> bool {
         match (self, rhs) {
             (Self::Cpu, Self::Cpu) => true,
@@ -466,12 +457,12 @@ impl Device {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
             Device::Cuda(device) => {
                 let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage(&storage)?;
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
                 let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage(&storage)?;
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
         }
@@ -482,12 +473,12 @@ impl Device {
             Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
             Device::Cuda(device) => {
                 let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage(&storage)?;
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
                 let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage(&storage)?;
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
         }
