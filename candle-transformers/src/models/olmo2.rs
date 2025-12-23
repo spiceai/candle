@@ -6,7 +6,10 @@
 //!
 //!
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b, linear_no_bias, rms_norm, Activation, Linear, RmsNorm, RmsNormNonQuantized, VarBuilder};
+use candle_nn::{
+    linear_b, linear_no_bias, rms_norm, Activation, Linear, RmsNorm, RmsNormNonQuantized,
+    VarBuilder,
+};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Deserialize)]

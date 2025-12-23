@@ -6,7 +6,10 @@ use candle::{
     shape::Dim, CpuStorage, CustomOp1, DType, Device, Error, IndexOp, Layout, Result, Shape,
     Tensor, WithDType, D,
 };
-use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsNorm, RmsNormNonQuantized, VarBuilder};
+use candle_nn::{
+    embedding, rms_norm, Activation, Embedding, Linear, Module, RmsNorm, RmsNormNonQuantized,
+    VarBuilder,
+};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
@@ -520,7 +523,11 @@ impl DeepSeekV2Config {
 
 enum QProj {
     Plain(Linear),
-    Lora { a: Linear, norm: RmsNorm<RmsNormNonQuantized>, b: Linear },
+    Lora {
+        a: Linear,
+        norm: RmsNorm<RmsNormNonQuantized>,
+        b: Linear,
+    },
 }
 
 impl QProj {
