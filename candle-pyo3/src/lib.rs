@@ -17,7 +17,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
+use ::candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
 
 mod utils;
 use utils::wrap_err;
@@ -217,12 +217,6 @@ trait MapDType {
             DType::F16 => self.f::<f16>(t),
             DType::F32 => self.f::<f32>(t),
             DType::F64 => self.f::<f64>(t),
-            DType::I16 => Err(PyErr::new::<PyTypeError, _>(
-                "i16 dtype is not supported in Python interface",
-            )),
-            DType::I32 => Err(PyErr::new::<PyTypeError, _>(
-                "i32 dtype is not supported in Python interface",
-            )),
             DType::F8E4M3 => Err(PyErr::new::<PyTypeError, _>(
                 "f8e4m3 dtype is not supported in Python interface",
             )),
@@ -1104,7 +1098,7 @@ impl PyTensor {
     /// Quantize the tensor.
     /// &RETURNS&: QTensor
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
-        use candle::quantized;
+        use ::candle::quantized;
         let res = match quantized_dtype.to_lowercase().as_str() {
             "q2k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q2K),
             "q3k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q3K),

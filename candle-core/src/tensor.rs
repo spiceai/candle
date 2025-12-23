@@ -1425,6 +1425,122 @@ impl Tensor {
         Ok(from_storage(storage, c_shape, op, false))
     }
 
+    /// Matrix-multiplication with a scalar multiplier (alpha).
+    ///
+    /// Computes `alpha * (self @ rhs)` where `@` represents matrix multiplication.
+    /// If `alpha` is `None`, it defaults to 1.0.
+    ///
+    /// # Arguments
+    ///
+    /// * `rhs` - The right-hand side matrix.
+    /// * `alpha` - Optional scalar multiplier applied to the result.
+    pub fn matmul_with_alpha(&self, rhs: &Self, alpha: Option<f64>) -> Result<Self> {
+        let a_dims = self.shape().dims();
+        let b_dims = rhs.shape().dims();
+
+        let dim = a_dims.len();
+
+        if dim < 2 || b_dims.len() != dim {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul_with_alpha",
+            }
+            .bt())?
+        }
+
+        let m = a_dims[dim - 2];
+        let k = a_dims[dim - 1];
+        let k2 = b_dims[dim - 2];
+        let n = b_dims[dim - 1];
+
+        let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
+        if c_shape.elem_count() == 0 || k == 0 {
+            return Tensor::zeros(c_shape, self.dtype(), self.device());
+        }
+        let batching: usize = a_dims[..dim - 2].iter().product();
+        let batching_b: usize = b_dims[..dim - 2].iter().product();
+        if k != k2 || batching != batching_b {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul_with_alpha",
+            }
+            .bt())?
+        }
+
+        let storage = self.storage().matmul_with_alpha(
+            &rhs.storage(),
+            alpha,
+            (batching, m, n, k),
+            self.layout(),
+            rhs.layout(),
+        )?;
+        // Note: No backprop for alpha-scaled matmul for now
+        let op = BackpropOp::none();
+        Ok(from_storage(storage, c_shape, op, false))
+    }
+
+    /// Matrix-multiplication with alpha and beta scaling, using a mutable output tensor.
+    ///
+    /// Computes `c = alpha * (self @ rhs) + beta * c` where `@` represents matrix multiplication.
+    /// This is an in-place operation that modifies `c`.
+    /// If `alpha` is `None`, it defaults to 1.0. Beta is implicitly 1.0.
+    ///
+    /// # Arguments
+    ///
+    /// * `rhs` - The right-hand side matrix.
+    /// * `c` - The mutable output tensor that will be modified in-place.
+    /// * `alpha` - Optional scalar multiplier applied to the matmul result.
+    pub fn matmul_with_alpha_beta(
+        &self,
+        rhs: &Self,
+        c: &mut Self,
+        alpha: Option<f64>,
+    ) -> Result<()> {
+        let a_dims = self.shape().dims();
+        let b_dims = rhs.shape().dims();
+        let c_dims = c.shape().dims();
+
+        let dim = a_dims.len();
+
+        if dim < 2 || b_dims.len() != dim || c_dims.len() != dim {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul_with_alpha_beta",
+            }
+            .bt())?
+        }
+
+        let m = a_dims[dim - 2];
+        let k = a_dims[dim - 1];
+        let k2 = b_dims[dim - 2];
+        let n = b_dims[dim - 1];
+
+        let batching: usize = a_dims[..dim - 2].iter().product();
+        let batching_b: usize = b_dims[..dim - 2].iter().product();
+        if k != k2 || batching != batching_b {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul_with_alpha_beta",
+            }
+            .bt())?
+        }
+
+        self.storage().matmul_with_alpha_beta(
+            &rhs.storage(),
+            &mut c.storage_mut(),
+            alpha,
+            (batching, m, n, k),
+            self.layout(),
+            rhs.layout(),
+            c.layout(),
+        )?;
+        Ok(())
+    }
+
     /// Matrix-multiplication with broadcasting support.
     ///
     /// Compared to `matmul` the two matrixes are allowed to have different dimensions as long as

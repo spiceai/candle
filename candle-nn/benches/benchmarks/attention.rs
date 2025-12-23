@@ -1,7 +1,8 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle::{DType, Device, Tensor};
 use candle_nn::scaled_dot_product_attention;
-use criterion::{black_box, criterion_group, Criterion, Throughput};
+use criterion::{criterion_group, Criterion, Throughput};
+use std::hint::black_box;
 use std::time::Instant;
 
 fn run_attention(q: &Tensor, k: &Tensor, v: &Tensor, m: &Tensor, s: f64) {

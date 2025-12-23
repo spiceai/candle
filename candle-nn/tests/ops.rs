@@ -5,7 +5,6 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::{test_device, test_utils::to_vec3_round, Device, IndexOp, Result, Tensor};
-use candle_nn::Activation;
 
 fn softmax(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
@@ -43,22 +42,6 @@ fn softmax(device: &Device) -> Result<()> {
     let t2 = candle_nn::ops::softmax_last_dim(&tensor.log()?)?;
     assert_eq!(
         to_vec3_round(&t2, 4)?,
-        &[
-            // (3, 1, 4) / 8, (1, 5, 9) / 15
-            [[0.375, 0.125, 0.5], [0.0667, 0.3333, 0.6]],
-            // (2, 1, 7) / 10, (8, 2, 8) / 18
-            [[0.2, 0.1, 0.7], [0.4444, 0.1111, 0.4444]]
-        ]
-    );
-    Ok(())
-}
-
-fn inplace_softmax(device: &Device) -> Result<()> {
-    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
-    let mut tensor = Tensor::new(data, device)?.log()?;
-    candle_nn::ops::inplace_softmax_last_dim(&mut tensor)?;
-    assert_eq!(
-        to_vec3_round(&tensor, 4)?,
         &[
             // (3, 1, 4) / 8, (1, 5, 9) / 15
             [[0.375, 0.125, 0.5], [0.0667, 0.3333, 0.6]],
@@ -341,44 +324,12 @@ fn sigmoid(device: &Device) -> Result<()> {
     Ok(())
 }
 
-fn mul_and_act(device: &Device) -> Result<()> {
-    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
-    let cpu = Tensor::new(data, &Device::Cpu)?;
-    let x = Tensor::new(data, device)?;
-
-    for act in [Activation::Gelu, Activation::Relu, Activation::Silu] {
-        let truth = candle_nn::ops::mul_and_act(&cpu, &cpu, act)?;
-        let test = candle_nn::ops::mul_and_act(&x, &x, act)?.to_device(&Device::Cpu)?;
-
-        let sum_diff = (truth - test)?.abs()?.sum_all()?.to_vec0::<f32>()?;
-        if device.is_cpu() {
-            assert_eq!(sum_diff, 0., "act = {act:?}");
-        } else {
-            assert!(sum_diff < 3e-3, "act = {act:?}");
-        }
-    }
-
-    Ok(())
-}
-
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
 test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal);
-test_device!(
-    inplace_softmax,
-    inplace_softmax_cpu,
-    inplace_softmax_gpu,
-    inplace_softmax_metal
-);
 test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal);
 test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
-test_device!(
-    mul_and_act,
-    mul_and_act_cpu,
-    mul_and_act_gpu,
-    mul_and_act_metal
-);

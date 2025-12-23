@@ -5,7 +5,7 @@ use crate::{
     op::{BackpropOp, Op},
     shape::Dim,
     tensor::from_storage,
-    DType, Error, Result, Tensor,
+    DType, Error, Layout, Result, Tensor,
 };
 
 /// Specialization of `std::ops::RangeBounds` for `usize` to allow trait objects.
@@ -171,8 +171,13 @@ impl Tensor {
             }
             .bt())?
         }
-        let storage = self.storage().scatter_add(
-            self.layout(),
+        let shape = self.shape();
+        let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
+        self.storage()
+            .copy_strided_src(&mut storage, 0, self.layout())?;
+        let layout = Layout::contiguous(shape);
+        storage.scatter_add(
+            &layout,
             &indexes.storage(),
             indexes.layout(),
             &source.storage(),

@@ -351,3 +351,13 @@ pub fn rms_norm_quant(
         _ghost: PhantomData,
     })
 }
+
+/// Create an RmsNorm layer (non-quantized version).
+/// This is an alias for `rms_norm_non_quant` for convenience.
+pub fn rms_norm(
+    size: usize,
+    eps: f64,
+    vb: crate::VarBuilder,
+) -> Result<RmsNorm<RmsNormNonQuantized>> {
+    rms_norm_non_quant(size, eps, vb)
+}

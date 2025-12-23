@@ -2607,7 +2607,7 @@ impl BackendStorage for CpuStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
@@ -2618,7 +2618,7 @@ impl BackendStorage for CpuStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, params.c_out)).transpose(1, 2)?;
         let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
@@ -2659,8 +2659,9 @@ impl BackendStorage for CpuStorage {
                     vec![0, k_size * c_out, 1],
                     kernel_l.start_offset(),
                 );
-                self.matmul(
+                self.matmul_with_alpha(
                     kernel,
+                    None,
                     (
                         b_size,
                         /* m */ l_in,
@@ -3142,11 +3143,6 @@ impl BackendDevice for CpuDevice {
             }
         };
         Ok(storage)
-    }
-
-    fn get_current_seed(&self) -> Result<u64> {
-        // CPU backend doesn't maintain a seed state
-        Ok(0)
     }
 
     fn synchronize(&self) -> Result<()> {

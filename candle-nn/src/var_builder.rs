@@ -317,32 +317,6 @@ impl SimpleBackend for HashMap<String, Tensor> {
         tensor.to_device(dev)?.to_dtype(dtype)
     }
 
-    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
-        let tensor = self
-            .get(name)
-            .ok_or_else(|| {
-                Error::CannotFindTensor {
-                    path: name.to_string(),
-                }
-                .bt()
-            })?
-            .clone();
-        tensor.to_device(dev)?.to_dtype(dtype)
-    }
-
-    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
-        let tensor = self
-            .get(name)
-            .ok_or_else(|| {
-                Error::CannotFindTensor {
-                    path: name.to_string(),
-                }
-                .bt()
-            })?
-            .clone();
-        tensor.to_device(dev)?.to_dtype(dtype)
-    }
-
     fn contains_tensor(&self, name: &str) -> bool {
         self.contains_key(name)
     }

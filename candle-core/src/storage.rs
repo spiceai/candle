@@ -738,6 +738,7 @@ impl Storage {
         }
     }
 
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn matmul_with_alpha_beta(
         &self,
