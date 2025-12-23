@@ -266,18 +266,6 @@ pub fn flash_attn(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
-    flash_attn_softcap(q, k, v, softmax_scale, None, causal)
-}
-
-/// Equivalent to [`flash_attn`], but allows configuring a softcap applied to the attention logits.
-pub fn flash_attn_softcap(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    softcap: Option<f32>,
-    causal: bool,
-) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
 
@@ -286,7 +274,7 @@ pub fn flash_attn_softcap(
         alibi_slopes: None,
         window_size_left,
         window_size_right,
-        softcap,
+        softcap: None,
     };
     q.apply_op3(k, v, op)
 }
@@ -319,33 +307,12 @@ pub fn flash_attn_windowed(
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
 ) -> Result<Tensor> {
-    flash_attn_windowed_softcap(
-        q,
-        k,
-        v,
-        softmax_scale,
-        None,
-        window_size_left,
-        window_size_right,
-    )
-}
-
-/// Equivalent to [`flash_attn_windowed`], but allows configuring a softcap.
-pub fn flash_attn_windowed_softcap(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    softcap: Option<f32>,
-    window_size_left: Option<usize>,
-    window_size_right: Option<usize>,
-) -> Result<Tensor> {
     let op = FlashAttn {
         softmax_scale,
         alibi_slopes: None,
         window_size_left,
         window_size_right,
-        softcap,
+        softcap: None,
     };
     q.apply_op3(k, v, op)
 }
@@ -372,19 +339,6 @@ pub fn flash_attn_alibi(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
-    flash_attn_alibi_softcap(q, k, v, alibi_slopes, softmax_scale, None, causal)
-}
-
-/// Equivalent to [`flash_attn_alibi`], but allows configuring a softcap.
-pub fn flash_attn_alibi_softcap(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    alibi_slopes: &Tensor,
-    softmax_scale: f32,
-    softcap: Option<f32>,
-    causal: bool,
-) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
 
@@ -393,7 +347,7 @@ pub fn flash_attn_alibi_softcap(
         alibi_slopes: Some(alibi_slopes.clone()),
         window_size_left,
         window_size_right,
-        softcap,
+        softcap: None,
     };
     q.apply_op3(k, v, op)
 }
@@ -428,16 +382,14 @@ pub fn flash_attn_alibi_windowed(
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
 ) -> Result<Tensor> {
-    flash_attn_alibi_windowed_softcap(
-        q,
-        k,
-        v,
-        Some(alibi_slopes),
+    let op = FlashAttn {
         softmax_scale,
+        alibi_slopes: Some(alibi_slopes.clone()),
         window_size_left,
         window_size_right,
-        None,
-    )
+        softcap: None,
+    };
+    q.apply_op3(k, v, op)
 }
 
 /// Flash-attention v2 layer.
@@ -473,14 +425,14 @@ pub fn flash_attn_alibi_windowed_softcap(
     softmax_scale: f32,
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
-    softcap: Option<f32>,
+    softcap: f32,
 ) -> Result<Tensor> {
     let op = FlashAttn {
         softmax_scale,
         alibi_slopes: alibi_slopes.cloned(),
         window_size_left,
         window_size_right,
-        softcap,
+        softcap: Some(softcap),
     };
     q.apply_op3(k, v, op)
 }
@@ -535,9 +487,9 @@ impl FlashAttnVarLen {
             None => candle::bail!("seqlens_k has to be contiguous"),
         };
 
-    let q = q.as_cuda_slice::<T>()?;
-    let k = k.as_cuda_slice::<T>()?;
-    let v = v.as_cuda_slice::<T>()?;
+        let q = q.as_cuda_slice::<T>()?;
+        let k = k.as_cuda_slice::<T>()?;
+        let v = v.as_cuda_slice::<T>()?;
         let q = q.slice(q_l.start_offset()..);
         let k = k.slice(k_l.start_offset()..);
         let v = v.slice(v_l.start_offset()..);
@@ -652,7 +604,7 @@ impl FlashAttnVarLen {
         let seqlen_k_rounded = round_multiple(self.max_seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-    let dst = unsafe { dev.alloc::<T>(elem_count)? };
+        let dst = unsafe { dev.alloc::<T>(elem_count)? };
         let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
@@ -791,34 +743,6 @@ pub fn flash_attn_varlen(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
-    flash_attn_varlen_softcap(
-        q,
-        k,
-        v,
-        seqlens_q,
-        seqlens_k,
-        max_seqlen_q,
-        max_seqlen_k,
-        softmax_scale,
-        None,
-        causal,
-    )
-}
-
-/// Equivalent to [`flash_attn_varlen`], but allows configuring a softcap.
-#[allow(clippy::too_many_arguments)]
-pub fn flash_attn_varlen_softcap(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    seqlens_q: &Tensor,
-    seqlens_k: &Tensor,
-    max_seqlen_q: usize,
-    max_seqlen_k: usize,
-    softmax_scale: f32,
-    softcap: Option<f32>,
-    causal: bool,
-) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
 
@@ -831,7 +755,7 @@ pub fn flash_attn_varlen_softcap(
         alibi_slopes: None,
         window_size_left,
         window_size_right,
-        softcap,
+        softcap: None,
     };
     q.apply_op3(k, v, op)
 }
@@ -876,36 +800,6 @@ pub fn flash_attn_varlen_windowed(
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
 ) -> Result<Tensor> {
-    flash_attn_varlen_windowed_softcap(
-        q,
-        k,
-        v,
-        seqlens_q,
-        seqlens_k,
-        max_seqlen_q,
-        max_seqlen_k,
-        softmax_scale,
-        window_size_left,
-        window_size_right,
-        None,
-    )
-}
-
-/// Equivalent to [`flash_attn_varlen_windowed`], but allows configuring a softcap.
-#[allow(clippy::too_many_arguments)]
-pub fn flash_attn_varlen_windowed_softcap(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    seqlens_q: &Tensor,
-    seqlens_k: &Tensor,
-    max_seqlen_q: usize,
-    max_seqlen_k: usize,
-    softmax_scale: f32,
-    window_size_left: Option<usize>,
-    window_size_right: Option<usize>,
-    softcap: Option<f32>,
-) -> Result<Tensor> {
     let op = FlashAttnVarLen {
         softmax_scale,
         max_seqlen_q,
@@ -915,7 +809,7 @@ pub fn flash_attn_varlen_windowed_softcap(
         alibi_slopes: None,
         window_size_left,
         window_size_right,
-        softcap,
+        softcap: None,
     };
     q.apply_op3(k, v, op)
 }
@@ -954,36 +848,6 @@ pub fn flash_attn_varlen_alibi(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
-    flash_attn_varlen_alibi_softcap(
-        q,
-        k,
-        v,
-        alibi_slopes,
-        seqlens_q,
-        seqlens_k,
-        max_seqlen_q,
-        max_seqlen_k,
-        softmax_scale,
-        None,
-        causal,
-    )
-}
-
-/// Equivalent to [`flash_attn_varlen_alibi`], but allows configuring a softcap.
-#[allow(clippy::too_many_arguments)]
-pub fn flash_attn_varlen_alibi_softcap(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    alibi_slopes: &Tensor,
-    seqlens_q: &Tensor,
-    seqlens_k: &Tensor,
-    max_seqlen_q: usize,
-    max_seqlen_k: usize,
-    softmax_scale: f32,
-    softcap: Option<f32>,
-    causal: bool,
-) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
 
@@ -996,7 +860,7 @@ pub fn flash_attn_varlen_alibi_softcap(
         alibi_slopes: Some(alibi_slopes.clone()),
         window_size_left,
         window_size_right,
-        softcap,
+        softcap: None,
     };
     q.apply_op3(k, v, op)
 }
@@ -1043,20 +907,18 @@ pub fn flash_attn_varlen_alibi_windowed(
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
 ) -> Result<Tensor> {
-    flash_attn_varlen_alibi_windowed_softcap(
-        q,
-        k,
-        v,
-        alibi_slopes,
-        seqlens_q,
-        seqlens_k,
+    let op = FlashAttnVarLen {
+        softmax_scale,
         max_seqlen_q,
         max_seqlen_k,
-        softmax_scale,
+        seqlens_q: seqlens_q.clone(),
+        seqlens_k: seqlens_k.clone(),
+        alibi_slopes: Some(alibi_slopes.clone()),
         window_size_left,
         window_size_right,
-        None,
-    )
+        softcap: None,
+    };
+    q.apply_op3(k, v, op)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1071,14 +933,14 @@ pub fn flash_attn_varlen_alibi_windowed(
 /// * `q` - Query tensor with shape `(total_q, num_heads_q, head_size)`.
 /// * `k` - Key tensor with shape `(total_kv, num_heads_kv, head_size)`.
 /// * `v` - Value tensor with shape `(total_kv, num_heads_kv, head_size)`.
-/// * `alibi_slopes` - Alibi slopes tensor with shape `(num_heads_q)`.
+/// * `alibi_slopes` - Option, alibi slopes tensor with shape `(num_heads_q)`.
 /// * `seqlens_q` - The cumulative lengths of the sequences in the batch, used to index in q.
 /// * `seqlens_k` - The cumulative lengths of the sequences in the batch, used to index in k and v.
 /// * `max_seqlen_q` - The maximum query sequence length for q in the batch.
 /// * `max_seqlen_k` - The maximum query sequence length for k and v in the batch.
-/// * `window_size_left` - Optional limit on left attention to value tokens.
-/// * `window_size_right` - Optional limit on right attention to value tokens.
-/// * `softcap` - Optional Gemma-style softcap applied to the attention logits before softmax.
+/// * `window_size_left` - Option, limit left attention to value tokens.
+/// * `window_size_right` - Option, limit right attention to value tokens.
+/// * `softcap` - Gemma style softcap the attention logits before the softmax.
 ///
 /// `seqlens_q` and `seqlens_k` contain `batch_size + 1` elements, typically `0`, `seqlen_1`,
 /// `seqlen_1 + seqlen_2`, etc.
@@ -1093,7 +955,7 @@ pub fn flash_attn_varlen_alibi_windowed_softcap(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
-    alibi_slopes: &Tensor,
+    alibi_slopes: Option<&Tensor>,
     seqlens_q: &Tensor,
     seqlens_k: &Tensor,
     max_seqlen_q: usize,
@@ -1101,7 +963,7 @@ pub fn flash_attn_varlen_alibi_windowed_softcap(
     softmax_scale: f32,
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
-    softcap: Option<f32>,
+    softcap: f32,
 ) -> Result<Tensor> {
     let op = FlashAttnVarLen {
         softmax_scale,
@@ -1109,10 +971,10 @@ pub fn flash_attn_varlen_alibi_windowed_softcap(
         max_seqlen_k,
         seqlens_q: seqlens_q.clone(),
         seqlens_k: seqlens_k.clone(),
-        alibi_slopes: Some(alibi_slopes.clone()),
+        alibi_slopes: alibi_slopes.cloned(),
         window_size_left,
         window_size_right,
-        softcap,
+        softcap: Some(softcap),
     };
     q.apply_op3(k, v, op)
 }

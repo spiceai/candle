@@ -1,16 +1,61 @@
 #include "cuda_utils.cuh"
 #include <cmath>
 #include <stdint.h>
+#include <cuda/std/limits>
 
 #define WARP_SIZE 32
 const int BLOCK_SIZE = 1024;
 
-static __device__ __forceinline__ float warp_reduce_max(float x) {
-#pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, 32));
-    }
-    return x;
+// Helpers to initialize reduction identities for both floating-point and
+// integer types. For floats we keep using +/-INFINITY, while for integers
+// we use well-defined numeric_limits values instead of relying on casting
+// +/-INFINITY to an integer type (which is undefined behaviour and has been
+// observed to break on newer GPU architectures such as Blackwell).
+template <typename T>
+__device__ __forceinline__ T reduce_init_lowest() {
+  // Default implementation is used for floating-point types (__half,
+  // __nv_bfloat16, float, double). The conversion from -INFINITY (double)
+  // to these types is well-defined and produces -inf.
+  return -INFINITY;
+}
+
+template <typename T>
+__device__ __forceinline__ T reduce_init_highest() {
+  // Default implementation is used for floating-point types (__half,
+  // __nv_bfloat16, float, double). The conversion from INFINITY (double)
+  // to these types is well-defined and produces +inf.
+  return INFINITY;
+}
+
+// Integer specializations – use numeric_limits instead of +/-INFINITY.
+template <>
+__device__ __forceinline__ int64_t reduce_init_lowest<int64_t>() {
+  return ::cuda::std::numeric_limits<int64_t>::lowest();
+}
+
+template <>
+__device__ __forceinline__ uint32_t reduce_init_lowest<uint32_t>() {
+  return ::cuda::std::numeric_limits<uint32_t>::lowest();
+}
+
+template <>
+__device__ __forceinline__ uint8_t reduce_init_lowest<uint8_t>() {
+  return ::cuda::std::numeric_limits<uint8_t>::lowest();
+}
+
+template <>
+__device__ __forceinline__ int64_t reduce_init_highest<int64_t>() {
+  return ::cuda::std::numeric_limits<int64_t>::max();
+}
+
+template <>
+__device__ __forceinline__ uint32_t reduce_init_highest<uint32_t>() {
+  return ::cuda::std::numeric_limits<uint32_t>::max();
+}
+
+template <>
+__device__ __forceinline__ uint8_t reduce_init_highest<uint8_t>() {
+  return ::cuda::std::numeric_limits<uint8_t>::max();
 }
 
 // TODO: Maybe add some fast_sum_f16_f32 variant that not only accumulate in f32
@@ -110,21 +155,21 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
 
     if (alpha == nullptr && beta == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std; 
+          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs);
       }
     }
     else if (alpha == nullptr && beta != nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
           float b = static_cast<float>(beta[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std; 
+          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs + b);
       }
     }
     else if (alpha != nullptr && beta == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
           float a = static_cast<float>(alpha[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std; 
+          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs * a);
       }
     }
@@ -132,7 +177,7 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
       for (int col = tid; col < ncols; col += block_size) {
           float a = static_cast<float>(alpha[col]);
           float b = static_cast<float>(beta[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std; 
+          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs * a + b);
       }
     }
@@ -227,125 +272,7 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 }
 
 template <typename T>
-__device__ void attn_soft_max(
-  const T * x,
-  const T * mask,
-  T * dst,
-  const int ncols,
-  const int nrows_y,
-  const int elem_per_batch,
-  const float scale
-) {
-  const int tid = threadIdx.x;
-  const int rowx = blockIdx.x;
-  const int rowy = rowx % nrows_y; // broadcast the mask in the row dimension
-
-  const int block_size = blockDim.x;
-
-  const int warp_id = threadIdx.x / WARP_SIZE;
-  const int lane_id = threadIdx.x % WARP_SIZE;
-
-  extern __shared__ float smem[];
-  float *buf_iw = smem; // shared memory buffer for inter-warp communication
-  // shared memory buffer to cache values between iterations:
-  T *vals = dst + static_cast<int64_t>(rowx) * ncols;
-
-  float max_val = -INFINITY;
-
-#pragma unroll
-  for (int col0 = 0; col0 < ncols; col0 += block_size) {
-    const int col = col0 + tid;
-
-    if (col >= ncols) {
-      break;
-    }
-
-    const int64_t ix = static_cast<int64_t>(rowx) * ncols + col;
-
-    const int64_t b_idx = elem_per_batch > 0 ? ix / elem_per_batch : 0;
-    const int64_t iy = static_cast<int64_t>(b_idx) * (ncols * nrows_y) + rowy * ncols + col;
-
-    const float val = float(x[ix]) * scale + (mask ? float(mask[iy]) : 0.0f);
-
-    vals[col] = val;
-    max_val = max(max_val, val);
-  }
-
-  // find the max value in the block
-  max_val = warp_reduce_max(max_val);
-  if (block_size > WARP_SIZE) {
-    if (warp_id == 0) {
-      buf_iw[lane_id] = -INFINITY;
-    }
-    __syncthreads();
-
-    if (lane_id == 0) {
-      buf_iw[warp_id] = max_val;
-    }
-    __syncthreads();
-
-    max_val = buf_iw[lane_id];
-    max_val = warp_reduce_max(max_val);
-  }
-
-  float tmp = 0.0f; // partial sum
-
-#pragma unroll
-  for (int col0 = 0; col0 < ncols; col0 += block_size) {
-    const int col = col0 + tid;
-
-    if (col >= ncols) {
-      break;
-    }
-
-    const float val = expf(float(vals[col]) - max_val);
-    tmp += val;
-    vals[col] = val;
-  }
-
-  // find the sum of exps in the block
-  tmp = warp_reduce_sum(tmp);
-  if (block_size > WARP_SIZE) {
-    __syncthreads();
-    if (warp_id == 0) {
-      buf_iw[lane_id] = 0.0f;
-    }
-    __syncthreads();
-
-    if (lane_id == 0) {
-      buf_iw[warp_id] = tmp;
-    }
-    __syncthreads();
-
-    tmp = buf_iw[lane_id];
-    tmp = warp_reduce_sum(tmp);
-  }
-
-  const float inv_sum = 1.0f / tmp;
-
-#pragma unroll
-  for (int col0 = 0; col0 < ncols; col0 += block_size) {
-    const int col = col0 + tid;
-
-    if (col >= ncols) {
-      return;
-    }
-
-    const int64_t idst = static_cast<int64_t>(rowx) * ncols + col;
-    dst[idst] = float(vals[col]) * inv_sum;
-  }
-}
-
-template <typename T>
-__device__ void ropei(
-  const T * src,
-  const T * cos,
-  const T * sin,
-  T * dst,
-  const uint32_t bh,
-  const uint32_t td,
-  const uint32_t stride_b
-) {
+__device__ void ropei(const T * src, const T * cos, const T * sin, T * dst, const uint32_t bh, const uint32_t td, const uint32_t stride_b) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (2 * idx >= bh * td) return;
 
@@ -427,7 +354,9 @@ fast_max(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
-  shr[tid] = -INFINITY;
+  // Initialize with the lowest representable value for T so that the first
+  // comparison in the reduction always picks a real element.
+  shr[tid] = reduce_init_lowest<T>();
   // Elements summed in this block range from dst_id * el_to_sum_per_block
   // to (dst_id + 1) * el_to_sum_per_block.
   size_t start_idx = dst_id * el_to_sum_per_block;
@@ -465,7 +394,9 @@ fast_min(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
-  shr[tid] = INFINITY;
+  // Initialize with the highest representable value for T so that the first
+  // comparison in the reduction always picks a real element.
+  shr[tid] = reduce_init_highest<T>();
   // Elements summed in this block range from dst_id * el_to_sum_per_block
   // to (dst_id + 1) * el_to_sum_per_block.
   size_t start_idx = dst_id * el_to_sum_per_block;
@@ -504,8 +435,9 @@ fast_argmin(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
-  // Not sure how that works on uint32_t and uint8_t but it seems to do ok.
-  shr[tid] = INFINITY;
+  // For floating types this uses +inf; for integer types we use the largest
+  // representable value instead of casting INFINITY to an integer.
+  shr[tid] = reduce_init_highest<T>();
   shr_index[tid] = 0xFFFFFFFF;
   bool not_set = true;
   // Elements summed in this block range from dst_id * el_to_sum_per_block
@@ -553,7 +485,9 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
-  shr[tid] = -INFINITY;
+  // For floating types this uses -inf; for integer types we use the lowest
+  // representable value instead of casting -INFINITY to an integer.
+  shr[tid] = reduce_init_lowest<T>();
   shr_index[tid] = 0xFFFFFFFF;
   bool not_set = true;
   // Elements summed in this block range from dst_id * el_to_sum_per_block
@@ -662,20 +596,7 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
       const TYPENAME *src, TYPENAME *dst,                                      \
       const int n_cols) {                                                      \
     softmax<TYPENAME, ACC_TYPENAME>(src, dst, n_cols);                         \
-  }     
-
-#define ATTN_SOFTMAX_OP(TYPENAME, FN_NAME) \
-  extern "C" __global__ void FN_NAME(                                          \
-      const TYPENAME * x,                                                      \
-      const TYPENAME * mask,                                                   \
-      TYPENAME * dst,                                                          \
-      const int ncols,                                                         \
-      const int nrows_y,                                                       \
-      const int elem_per_batch,                                                       \
-      const float scale                                                       \
-  ) {                                                                          \
-    attn_soft_max<TYPENAME>(x, mask, dst, ncols, nrows_y, elem_per_batch, scale);               \
-  }                                                                                \
+  }                                                                            \
 
 #define RMSNORM_OP(TYPENAME, FN_NAME) \
   extern "C" __global__ void FN_NAME(                                          \
@@ -727,9 +648,7 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
   } \
 
 #if __CUDA_ARCH__ >= 800
-#include "cuda_bf16.h"
 SOFTMAX_OP(__nv_bfloat16, float, softmax_bf16)
-ATTN_SOFTMAX_OP(__nv_bfloat16, attn_soft_max_bf16)
 RMSNORM_OP(__nv_bfloat16, rmsnorm_bf16)
 LAYERNORM_OP(__nv_bfloat16, layernorm_bf16)
 ROPE_OP(__nv_bfloat16, rope_bf16, rope_i_bf16, rope_thd_bf16)
@@ -747,7 +666,6 @@ FAST_OP(__nv_bfloat16, fast_min_bf16, fast_max_bf16, fast_argmin_bf16, fast_argm
 
 #if __CUDA_ARCH__ >= 530
 SOFTMAX_OP(__half, float, softmax_f16)
-ATTN_SOFTMAX_OP(__half, attn_soft_max_f16)
 RMSNORM_OP(__half, rmsnorm_f16)
 LAYERNORM_OP(__half, layernorm_f16)
 ROPE_OP(__half, rope_f16, rope_i_f16, rope_thd_f16)
@@ -760,8 +678,6 @@ SUM_OP(double, sum_f64)
 SUM_OP(uint32_t, sum_u32)
 SOFTMAX_OP(float, float, softmax_f32)
 SOFTMAX_OP(double, double, softmax_f64)
-ATTN_SOFTMAX_OP(float, attn_soft_max_f32)
-ATTN_SOFTMAX_OP(double, attn_soft_max_f64)
 RMSNORM_OP(float, rmsnorm_f32)
 RMSNORM_OP(double, rmsnorm_f64)
 LAYERNORM_OP(float, layernorm_f32)
@@ -772,7 +688,5 @@ ROPE_OP(double, rope_f64, rope_i_f64, rope_thd_f64)
 FAST_OP(float, fast_min_f32, fast_max_f32, fast_argmin_f32, fast_argmax_f32, fast_sum_f32)
 FAST_OP(double, fast_min_f64, fast_max_f64, fast_argmin_f64, fast_argmax_f64, fast_sum_f64)
 FAST_OP(uint32_t, fast_min_u32, fast_max_u32, fast_argmin_u32, fast_argmax_u32, fast_sum_u32)
-FAST_OP(int16_t, fast_min_i16, fast_max_i16, fast_argmin_i16, fast_argmax_i16, fast_sum_i16)
-FAST_OP(int32_t, fast_min_i32, fast_max_i32, fast_argmin_i32, fast_argmax_i32, fast_sum_i32)
 FAST_OP(int64_t, fast_min_i64, fast_max_i64, fast_argmin_i64, fast_argmax_i64, fast_sum_i64)
 FAST_OP(uint8_t, fast_min_u8, fast_max_u8, fast_argmin_u8, fast_argmax_u8, fast_sum_u8)
