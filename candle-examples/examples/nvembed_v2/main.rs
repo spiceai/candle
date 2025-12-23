@@ -148,7 +148,7 @@ fn encode(
             device,
         )?;
         let b = attention_mask.dims()[0];
-        attention_mask.slice_assign(&[..b, ..instruction_lens], &zeros)?
+        attention_mask.slice_assign(&[&(..b), &(..instruction_lens)], &zeros)?
     } else {
         attention_mask.clone()
     };

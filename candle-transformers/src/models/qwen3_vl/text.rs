@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{
     embedding, kv_cache::KvCache, linear, linear_b, rms_norm, Activation, Embedding, Linear,
-    Module, RmsNorm, VarBuilder,
+    Module, RmsNorm, RmsNormNonQuantized, VarBuilder,
 };
 
 use super::config::TextConfig;
@@ -96,8 +96,8 @@ struct Attention {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    q_norm: RmsNorm<RmsNormNonQuantized>,
+    k_norm: RmsNorm<RmsNormNonQuantized>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -205,8 +205,8 @@ impl Attention {
 pub struct DecoderLayer {
     self_attn: Attention,
     mlp: Mlp,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: RmsNorm<RmsNormNonQuantized>,
+    post_attention_layernorm: RmsNorm<RmsNormNonQuantized>,
 }
 
 impl DecoderLayer {
@@ -251,7 +251,7 @@ impl DecoderLayer {
 
 pub struct Qwen3VLTextModel {
     embed_tokens: Embedding,
-    pub(super) norm: RmsNorm,
+    pub(super) norm: RmsNorm<RmsNormNonQuantized>,
     layers: Vec<DecoderLayer>,
     lm_head: Linear,
     pub(super) dtype: DType,

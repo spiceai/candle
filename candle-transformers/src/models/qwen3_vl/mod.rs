@@ -126,11 +126,11 @@ impl Qwen3VLModel {
                     let chunk = image_embeds.narrow(0, offset, len)?;
                     offset += len;
                     input_embeds = input_embeds.slice_assign(
-                        &[batch..batch + 1, start..end, 0..hidden_dim],
+                        &[&(batch..batch + 1), &(start..end), &(0..hidden_dim)],
                         &chunk.unsqueeze(0)?,
                     )?;
                     let ones = Tensor::ones((1, len), DType::F32, input_ids.device())?;
-                    image_mask = image_mask.slice_assign(&[batch..batch + 1, start..end], &ones)?;
+                    image_mask = image_mask.slice_assign(&[&(batch..batch + 1), &(start..end)], &ones)?;
                 }
             }
             image_mask_opt = Some(image_mask.to_dtype(DType::U8)?);
@@ -175,11 +175,11 @@ impl Qwen3VLModel {
                     let chunk = video_embeds.narrow(0, offset, len)?;
                     offset += len;
                     input_embeds = input_embeds.slice_assign(
-                        &[batch..batch + 1, start..end, 0..hidden_dim],
+                        &[&(batch..batch + 1), &(start..end), &(0..hidden_dim)],
                         &chunk.unsqueeze(0)?,
                     )?;
                     let ones = Tensor::ones((1, len), DType::F32, input_ids.device())?;
-                    video_mask = video_mask.slice_assign(&[batch..batch + 1, start..end], &ones)?;
+                    video_mask = video_mask.slice_assign(&[&(batch..batch + 1), &(start..end)], &ones)?;
                 }
             }
             video_mask_opt = Some(video_mask.to_dtype(DType::U8)?);

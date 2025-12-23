@@ -53,7 +53,7 @@ pub use group_norm::{group_norm, GroupNorm};
 pub use init::Init;
 pub use layer_norm::{
     layer_norm, layer_norm_no_bias, rms_norm, rms_norm_non_quant, rms_norm_quant, LayerNorm,
-    LayerNormConfig, RmsNorm,
+    LayerNormConfig, RmsNorm, RmsNormDefault, RmsNormNonQuantized, RmsNormQuantized,
 };
 pub use linear::{linear, linear_b, linear_no_bias, Linear};
 pub use ops::Dropout;

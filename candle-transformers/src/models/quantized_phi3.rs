@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{kv_cache::KvCache, Embedding, RmsNorm};
+use candle_nn::{kv_cache::KvCache, Embedding, RmsNorm, RmsNormNonQuantized};
 
 #[derive(Debug, Clone)]
 struct QLinear {
@@ -64,9 +64,9 @@ impl Module for Mlp {
     }
 }
 
-fn rms_norm(w: QTensor, eps: f64) -> Result<RmsNorm> {
+fn rms_norm(w: QTensor, eps: f64) -> Result<RmsNorm<RmsNormNonQuantized>> {
     let w = w.dequantize(&w.device())?;
-    let rms = RmsNorm::new(w, eps);
+    let rms = RmsNorm::<RmsNormNonQuantized>::new(w, eps);
     Ok(rms)
 }
 
@@ -74,8 +74,8 @@ fn rms_norm(w: QTensor, eps: f64) -> Result<RmsNorm> {
 struct LayerWeights {
     attn_qkv: QLinear,
     attn_output: QLinear,
-    attn_norm: RmsNorm,
-    ffn_norm: RmsNorm,
+    attn_norm: RmsNorm<RmsNormNonQuantized>,
+    ffn_norm: RmsNorm<RmsNormNonQuantized>,
     mlp: Mlp,
     n_head: usize,
     n_kv_head: usize,
@@ -192,7 +192,7 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
-    output_norm: RmsNorm,
+    output_norm: RmsNorm<RmsNormNonQuantized>,
     output: QLinear,
     masks: HashMap<usize, Tensor>,
     span: tracing::Span,

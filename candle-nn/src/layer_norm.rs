@@ -361,3 +361,6 @@ pub fn rms_norm(
 ) -> Result<RmsNorm<RmsNormNonQuantized>> {
     rms_norm_non_quant(size, eps, vb)
 }
+
+/// Type alias for backward compatibility - non-quantized RmsNorm.
+pub type RmsNormDefault = RmsNorm<RmsNormNonQuantized>;

@@ -8,7 +8,7 @@
 ///
 use crate::generation::LogitsProcessor;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{embedding, linear_b, Embedding, Linear, RmsNorm, VarBuilder};
+use candle_nn::{embedding, linear_b, Embedding, Linear, RmsNorm, RmsNormNonQuantized, VarBuilder};
 use std::sync::Arc;
 
 #[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,9 +142,9 @@ impl RotaryEmbedding {
         Ok((q_embed, k_embed))
     }
 }
-fn rms_norm(hidden_size: usize, eps: f64, vb: VarBuilder) -> Result<RmsNorm> {
+fn rms_norm(hidden_size: usize, eps: f64, vb: VarBuilder) -> Result<RmsNorm<RmsNormNonQuantized>> {
     let weight = vb.get((hidden_size,), "scale")?;
-    Ok(RmsNorm::new(weight, eps))
+    Ok(RmsNorm::<RmsNormNonQuantized>::new(weight, eps))
 }
 
 #[derive(Debug, Clone)]
@@ -274,8 +274,8 @@ impl Module for Mlp {
 
 #[derive(Debug, Clone)]
 struct Layer {
-    mlp_norm: RmsNorm,
-    sa_norm: RmsNorm,
+    mlp_norm: RmsNorm<RmsNormNonQuantized>,
+    sa_norm: RmsNorm<RmsNormNonQuantized>,
     attn: Attention,
     mlp: Mlp,
 }
@@ -317,7 +317,7 @@ impl Layer {
 #[derive(Debug, Clone)]
 pub struct LlamaModel {
     layers: Vec<Layer>,
-    norm: RmsNorm,
+    norm: RmsNorm<RmsNormNonQuantized>,
     device: Device,
     dtype: DType,
 }

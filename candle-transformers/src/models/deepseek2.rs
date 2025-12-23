@@ -6,7 +6,7 @@ use candle::{
     shape::Dim, CpuStorage, CustomOp1, DType, Device, Error, IndexOp, Layout, Result, Shape,
     Tensor, WithDType, D,
 };
-use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsNorm, VarBuilder};
+use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsNorm, RmsNormNonQuantized, VarBuilder};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
@@ -520,7 +520,7 @@ impl DeepSeekV2Config {
 
 enum QProj {
     Plain(Linear),
-    Lora { a: Linear, norm: RmsNorm, b: Linear },
+    Lora { a: Linear, norm: RmsNorm<RmsNormNonQuantized>, b: Linear },
 }
 
 impl QProj {
@@ -535,7 +535,7 @@ impl QProj {
 struct Attention {
     q: QProj,
     kv_a_proj_with_mqa: Linear,
-    kv_a_layernorm: RmsNorm,
+    kv_a_layernorm: RmsNorm<RmsNormNonQuantized>,
     kv_b_proj: Linear,
     o_proj: Linear,
     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
@@ -905,8 +905,8 @@ impl MoeOrMlp {
 }
 
 struct DecoderLayer {
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: RmsNorm<RmsNormNonQuantized>,
+    post_attention_layernorm: RmsNorm<RmsNormNonQuantized>,
     attn: Attention,
     moe_or_mlp: MoeOrMlp,
 }
@@ -976,7 +976,7 @@ impl DecoderLayer {
 pub struct DeepSeekV2 {
     lm_head: Linear,
     embed_tokens: Embedding,
-    norm: RmsNorm,
+    norm: RmsNorm<RmsNormNonQuantized>,
     layers: Vec<DecoderLayer>,
     dtype: DType,
     device: Device,

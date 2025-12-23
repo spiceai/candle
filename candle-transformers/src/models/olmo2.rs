@@ -6,7 +6,7 @@
 //!
 //!
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b, linear_no_bias, rms_norm, Activation, Linear, RmsNorm, VarBuilder};
+use candle_nn::{linear_b, linear_no_bias, rms_norm, Activation, Linear, RmsNorm, RmsNormNonQuantized, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -106,8 +106,8 @@ struct Attention {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    q_norm: RmsNorm<RmsNormNonQuantized>,
+    k_norm: RmsNorm<RmsNormNonQuantized>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -217,8 +217,8 @@ impl Attention {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
-    post_attention_layernorm: RmsNorm,
-    post_feedforward_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm<RmsNormNonQuantized>,
+    post_feedforward_layernorm: RmsNorm<RmsNormNonQuantized>,
 }
 
 impl DecoderLayer {
@@ -268,7 +268,7 @@ impl DecoderLayer {
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    norm: RmsNorm<RmsNormNonQuantized>,
     lm_head: Linear,
     device: Device,
     dtype: DType,
