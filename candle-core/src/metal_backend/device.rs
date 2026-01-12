@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
-use super::MetalError;
+use super::{MetalError, METAL_SHARED_BUFFER_STORAGE_MODE};
 
 /// Unique identifier for cuda devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -120,6 +120,10 @@ pub struct MetalDevice {
     pub(crate) kernels: Arc<Kernels>,
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
+    /// Whether to use the MLX matmul kernels instead of the MFA ones.
+    pub(crate) use_mlx_mm: bool,
+    /// Value of the current seed
+    pub(crate) seed_value: Arc<RwLock<u64>>,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -158,6 +162,10 @@ impl MetalDevice {
             .new_compute_pipeline_state_with_function(&func)
             .map_err(MetalError::from)?;
         Ok(pl)
+    }
+
+    pub fn set_use_mlx_mm(&mut self, use_mlx_mm: bool) {
+        self.use_mlx_mm = use_mlx_mm
     }
 
     pub fn id(&self) -> DeviceId {
@@ -215,7 +223,7 @@ impl MetalDevice {
         name: &str,
     ) -> Result<Arc<Buffer>> {
         let size = (element_count * dtype.size_in_bytes()) as NSUInteger;
-        self.allocate_buffer(size, MTLResourceOptions::StorageModePrivate, name)
+        self.allocate_buffer(size, METAL_SHARED_BUFFER_STORAGE_MODE, name)
     }
 
     /// Creates a new buffer (not necessarily zeroed).
@@ -224,7 +232,7 @@ impl MetalDevice {
     /// synchronization when the CPU memory is modified
     /// Used as a bridge to gather data back from the GPU
     pub fn new_buffer_managed(&self, size: NSUInteger) -> Result<Arc<Buffer>> {
-        self.allocate_buffer(size, MTLResourceOptions::StorageModeManaged, "managed")
+        self.allocate_buffer(size, METAL_SHARED_BUFFER_STORAGE_MODE, "managed")
     }
 
     /// Creates a new buffer from data.
@@ -237,12 +245,12 @@ impl MetalDevice {
         let new_buffer = self.device.new_buffer_with_data(
             data.as_ptr().cast(),
             size,
-            MTLResourceOptions::StorageModeManaged,
+            METAL_SHARED_BUFFER_STORAGE_MODE,
         );
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
 
         let subbuffers = buffers
-            .entry((size, MTLResourceOptions::StorageModeManaged))
+            .entry((size, METAL_SHARED_BUFFER_STORAGE_MODE))
             .or_insert(vec![]);
 
         let new_buffer = Arc::new(new_buffer);
@@ -253,7 +261,7 @@ impl MetalDevice {
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
         let buffer = self.allocate_buffer(
             size_in_bytes as NSUInteger,
-            MTLResourceOptions::StorageModePrivate,
+            METAL_SHARED_BUFFER_STORAGE_MODE,
             "allocate_zeros",
         )?;
         let command_buffer = self.command_buffer()?;

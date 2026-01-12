@@ -83,6 +83,7 @@ pub mod streaming;
 mod strided_index;
 mod tensor;
 mod tensor_cat;
+mod tensor_indexing;
 pub mod test_utils;
 pub mod utils;
 mod variable;
@@ -91,7 +92,7 @@ mod variable;
 pub use cuda_backend::cudnn;
 
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
-pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
+pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use error::{Context, Error, Result};
@@ -101,7 +102,7 @@ pub use shape::{Shape, D};
 pub use storage::Storage;
 pub use streaming::{StreamTensor, StreamingBinOp, StreamingModule};
 pub use strided_index::{StridedBlocks, StridedIndex};
-pub use tensor::{Tensor, TensorId};
+pub use tensor::{from_storage_no_op, Tensor, TensorId};
 pub use variable::Var;
 
 #[cfg(feature = "cuda")]

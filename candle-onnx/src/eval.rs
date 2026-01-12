@@ -364,7 +364,7 @@ fn simple_eval_(
                 // HACK: current implementation of broadcast_pow cannot handle negative base,
                 // so we use powf where we can, which *does* correctly handle negative base.
                 if let Ok(exp) = (|| input1.to_dtype(DType::F64)?.to_scalar::<f64>())() {
-                    let output = input0.powf(exp)?;
+                    let output = input0.powf(exp as f64)?;
                     values.insert(node.output[0].clone(), output);
                 } else {
                     let output = input0.broadcast_pow(input1)?;
@@ -645,7 +645,7 @@ fn simple_eval_(
                     let mask = indices.lt(&zeros)?;
                     mask.to_dtype(indices.dtype())?
                         .broadcast_mul(&max)?
-                        .add(indices)?
+                        .add(&indices)?
                 };
 
                 // In Pytorch or Numpy this can be done by indexing the xs tensor using the indices
@@ -762,6 +762,8 @@ fn simple_eval_(
                 let output = match start.dtype() {
                     DType::U8 => arange_step!(u8),
                     DType::U32 => arange_step!(u32),
+                    DType::I16 => arange_step!(i16),
+                    DType::I32 => arange_step!(i32),
                     DType::I64 => arange_step!(i64),
                     DType::BF16 => arange_step!(f32),
                     DType::F16 => arange_step!(f32),
@@ -1688,7 +1690,7 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
                 let dt = input.dtype();
                 match dt {
-                    DType::U8 | DType::U32 | DType::I64 => {
+                    DType::U8 | DType::U32 | DType::I64 | DType::I16 | DType::I32 => {
                         bail!(
                             "unsupported dtype {}, only float types are allowed for LeakyRelu",
                             dt.as_str()

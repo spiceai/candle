@@ -19,6 +19,12 @@ const CAST: &str = include_str!("cast.metal");
 const CONV: &str = include_str!("conv.metal");
 const FILL: &str = include_str!("fill.metal");
 const INDEXING: &str = include_str!("indexing.metal");
+// Current source: https://github.com/ivarflakstad/metal-flash-attention/tree/candle
+#[cfg(not(target_os = "ios"))]
+const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
+// Current source: https://github.com/philipturner/metal-flash-attention/releases/tag/v1.0.1
+#[cfg(target_os = "ios")]
+const MFA: &[u8] = include_bytes!("libMetalFlashAttention.ios.metallib");
 const MLX_GEMM: &str = include_str!("mlx_gemm.metal");
 const MLX_SORT: &str = include_str!("mlx_sort.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
@@ -28,6 +34,7 @@ const SORT: &str = include_str!("sort.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const UNARY: &str = include_str!("unary.metal");
 const SDPA: &str = include_str!("scaled_dot_product_attention.metal");
+const MUL_AND_ACT: &str = include_str!("mul_and_act.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
@@ -69,6 +76,7 @@ pub enum Source {
     Ternary,
     Unary,
     Sdpa,
+    MulAndAct,
 }
 
 pub mod copy2d {
@@ -77,6 +85,8 @@ pub mod copy2d {
     pub const HALF: Kernel = Kernel("copy2d_f16");
     pub const BFLOAT: Kernel = Kernel("copy2d_bf16");
     pub const I64: Kernel = Kernel("copy2d_i64");
+    pub const I32: Kernel = Kernel("copy2d_i32");
+    pub const I16: Kernel = Kernel("copy2d_i16");
     pub const U32: Kernel = Kernel("copy2d_u32");
     pub const U8: Kernel = Kernel("copy2d_u8");
 }
@@ -93,6 +103,8 @@ macro_rules! ops{
             pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16"));
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16"));
             pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64"));
+            pub const I32: Kernel = Kernel(concat!(stringify!($name), "_i32"));
+            pub const I16: Kernel = Kernel(concat!(stringify!($name), "_i16"));
             pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32"));
             pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8"));
         }
@@ -103,6 +115,8 @@ macro_rules! ops{
                 pub const HALF: Kernel = Kernel("copy_f16");
                 pub const BFLOAT: Kernel = Kernel("copy_bf16");
                 pub const I64: Kernel = Kernel("copy_i64");
+                pub const I32: Kernel = Kernel("copy_i32");
+                pub const I16: Kernel = Kernel("copy_i16");
                 pub const U32: Kernel = Kernel("copy_u32");
                 pub const U8: Kernel = Kernel("copy_u8");
             }
@@ -117,6 +131,8 @@ macro_rules! ops{
             pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16_tiled"));
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_tiled"));
             pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_tiled"));
+            pub const I32: Kernel = Kernel(concat!(stringify!($name), "_i32_tiled"));
+            pub const I16: Kernel = Kernel(concat!(stringify!($name), "_i16_tiled"));
             pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32_tiled"));
             pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8_tiled"));
         }
@@ -127,6 +143,8 @@ macro_rules! ops{
                 pub const HALF: Kernel = Kernel("copy_f16_tiled");
                 pub const BFLOAT: Kernel = Kernel("copy_bf16_tiled");
                 pub const I64: Kernel = Kernel("copy_i64_tiled");
+                pub const I32: Kernel = Kernel("copy_i32_tiled");
+                pub const I16: Kernel = Kernel("copy_i16_tiled");
                 pub const U32: Kernel = Kernel("copy_u32_tiled");
                 pub const U8: Kernel = Kernel("copy_u8_tiled");
             }
@@ -141,6 +159,8 @@ macro_rules! ops{
             pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16_strided"));
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_strided"));
             pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_strided"));
+            pub const I32: Kernel = Kernel(concat!(stringify!($name), "_i32_strided"));
+            pub const I16: Kernel = Kernel(concat!(stringify!($name), "_i16_strided"));
             pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32_strided"));
             pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8_strided"));
         }
@@ -151,6 +171,8 @@ macro_rules! ops{
                 pub const HALF: Kernel = Kernel("copy_f16_strided");
                 pub const BFLOAT: Kernel = Kernel("copy_bf16_strided");
                 pub const I64: Kernel = Kernel("copy_i64_strided");
+                pub const I32: Kernel = Kernel("copy_i32_strided");
+                pub const I16: Kernel = Kernel("copy_i16_strided");
                 pub const U32: Kernel = Kernel("copy_u32_strided");
                 pub const U8: Kernel = Kernel("copy_u8_strided");
             }
@@ -252,7 +274,7 @@ impl From<String> for KernelName {
 }
 
 type Libraries = HashMap<Source, Library>;
-type Pipelines = HashMap<(KernelName, Option<ConstantValues>), ComputePipelineState>;
+type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipelineState>;
 
 #[derive(Debug)]
 pub struct Kernels {
@@ -293,6 +315,8 @@ impl Kernels {
             Source::Ternary => TERNARY,
             Source::Unary => UNARY,
             Source::Sdpa => SDPA,
+            Source::MulAndAct => MUL_AND_ACT,
+            Source::Mfa => panic!("Invalid lib"),
         }
     }
 
@@ -339,11 +363,11 @@ impl Kernels {
         &self,
         device: &Device,
         source: Source,
-        name: impl Into<KernelName>,
+        name: &str,
         constants: Option<ConstantValues>,
     ) -> Result<ComputePipelineState, MetalKernelError> {
         let mut pipelines = self.pipelines.write()?;
-        let key = (name.into(), constants);
+        let key = (name.to_string(), constants);
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
         } else {
@@ -351,13 +375,13 @@ impl Kernels {
             let func = self.load_function(
                 device,
                 source,
-                name.as_ref(),
+                &name,
                 constants.as_ref().map(|c| c.function_constant_values()),
             )?;
             let pipeline = device
                 .new_compute_pipeline_state_with_function(&func)
                 .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
-            pipelines.insert((name, constants), pipeline.clone());
+            pipelines.insert((name.to_string(), constants), pipeline.clone());
 
             Ok(pipeline)
         }
@@ -370,7 +394,7 @@ impl Kernels {
         &self,
         device: &Device,
         source: Source,
-        name: impl Into<KernelName>,
+        name: &str,
     ) -> Result<ComputePipelineState, MetalKernelError> {
         self.load_pipeline_with_constants(device, source, name, None)
     }
@@ -825,6 +849,7 @@ pub fn call_last_softmax(
     input: &Buffer,
     input_offset: usize,
     output: &Buffer,
+    output_offset: usize,
 ) -> Result<(), MetalKernelError> {
     let work_per_threadgroup = elements;
 
@@ -835,7 +860,12 @@ pub fn call_last_softmax(
 
     set_params!(
         encoder,
-        (length, work_per_threadgroup, (input, input_offset), output)
+        (
+            length,
+            elements_to_sum,
+            (input, input_offset),
+            (output, output_offset)
+        )
     );
 
     let out_length = length / work_per_threadgroup;
@@ -858,6 +888,93 @@ pub fn call_last_softmax(
     };
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+// Requires continuous input and mask
+#[allow(clippy::too_many_arguments)]
+pub fn call_last_attn_softmax(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    input: &Buffer,
+    input_offset: usize,
+    mask: &Buffer,
+    mask_offset: usize,
+    input_shape: &[usize],
+    mask_shape: &[usize],
+    scale: f32,
+    ty: SdpaDType,
+    output: &Buffer,
+    output_offset: usize,
+) -> Result<(), MetalKernelError> {
+    // Everything is in reverse
+    let ne00 = input_shape[input_shape.len() - 1] as i64;
+    let ne01 = input_shape[input_shape.len() - 2] as i64;
+    let ne02 = input_shape[input_shape.len() - 3] as i64;
+    let ne03 = input_shape[input_shape.len() - 4] as i64;
+
+    let elem_per_batch = if mask_shape.len() == 2 {
+        0
+    } else {
+        let bs = input_shape[0];
+        let el: usize = input_shape.iter().product();
+        el / bs
+    };
+
+    let mut nth = 32; // SIMD width
+    let name = if ne00 % 4 == 0 {
+        while nth < ne00 / 4 && nth * ne01 * ne02 * ne03 < 256 {
+            nth *= 2;
+        }
+        match ty {
+            SdpaDType::F32 => "attn_soft_max_f32_4",
+            SdpaDType::F16 => "attn_soft_max_f16_4",
+            SdpaDType::BF16 => "attn_soft_max_bf16_4",
+        }
+    } else {
+        while nth < ne00 && nth * ne01 * ne02 * ne03 < 256 {
+            nth *= 2;
+        }
+        match ty {
+            SdpaDType::F32 => "attn_soft_max_f32",
+            SdpaDType::F16 => "attn_soft_max_f16",
+            SdpaDType::BF16 => "attn_soft_max_bf16",
+        }
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (input, input_offset),
+            (mask, mask_offset),
+            (output, output_offset),
+            ne00,
+            ne01,
+            ne02,
+            elem_per_batch as i64,
+            scale
+        )
+    );
+
+    let thread_group_count = MTLSize {
+        width: (ne01 * ne02 * ne03) as u64,
+        height: 1,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: nth as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.set_threadgroup_memory_length(0, 32 * std::mem::size_of::<f32>() as u64);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1632,6 +1749,176 @@ impl ConstantValues {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn call_gemm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs_stride: &[usize],
+    lhs_offset: usize,
+    lhs_buffer: &Buffer,
+    rhs_stride: &[usize],
+    rhs_offset: usize,
+    rhs_buffer: &Buffer,
+    output: &Buffer,
+    alpha: f32,
+    beta: f32,
+) -> Result<(), MetalKernelError> {
+    assert!(rhs_stride.len() >= 2);
+    assert!(lhs_stride.len() >= 2);
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+    // lhs has shape b, m, k
+    // We also allow for the case where the stride on the minor dimension is not as expected but
+    // there is a single element.
+    let a_trans = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+        false
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        true
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?;
+    };
+    // rhs has shape b, k, n
+    let b_trans = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+        false
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        true
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?;
+    };
+    let d_trans = false;
+    let batched = b > 1;
+    let fused_activation = false;
+    let fused_bias = false;
+    let (m_simd, n_simd, k_simd, m_splits, n_splits) = if m == 1 {
+        let m_simd = 8;
+        let n_simd = 8;
+        let k_simd = 64;
+        let m_splits = 1;
+        let n_splits = 1;
+        (m_simd, n_simd, k_simd, m_splits, n_splits)
+    } else {
+        let m_simd = 40;
+        let n_simd = 40;
+        let k_simd = 32;
+        let m_splits = 1;
+        let n_splits = 1;
+        (m_simd, n_simd, k_simd, m_splits, n_splits)
+    };
+    let constants = Some(ConstantValues::new(vec![
+        (0, Value::USize(m)),
+        (1, Value::USize(n)),
+        (2, Value::USize(k)),
+        (10, Value::Bool(a_trans)),
+        (11, Value::Bool(b_trans)),
+        (13, Value::Bool(d_trans)),
+        (20, Value::F32(alpha)),
+        (21, Value::F32(beta)),
+        (100, Value::Bool(batched)),
+        (101, Value::Bool(fused_activation)),
+        // Garbage
+        (102, Value::Bool(false)),
+        (103, Value::Bool(false)),
+        (113, Value::Bool(false)),
+        (50_000, Value::Bool(false)),
+        // End garbage
+        (200, Value::U16(m_simd)),
+        (201, Value::U16(n_simd)),
+        (202, Value::U16(k_simd)),
+        (210, Value::U16(m_splits)),
+        (211, Value::U16(n_splits)),
+        (50_001, Value::Bool(fused_bias)),
+    ]));
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Mfa, name, constants)?;
+    let m_group = m_simd * m_splits;
+    let n_group = n_simd * n_splits;
+
+    let a_block_length = m_group * k_simd;
+    let b_block_length = k_simd * n_group;
+
+    let mut block_elements = a_block_length + b_block_length;
+    if (m % 8 != 0) && (n % 8 != 0) {
+        let c_block_length = m_group * n_group;
+        block_elements = std::cmp::max(c_block_length, block_elements)
+    }
+    if fused_bias {
+        if d_trans {
+            block_elements = std::cmp::max(block_elements, m_group);
+        } else {
+            block_elements = std::cmp::max(block_elements, n_group);
+        }
+    }
+    let bytes = match name {
+        "sgemm" => 4,
+        "hgemm" => 2,
+        "bgemm" => 2,
+        other => {
+            return Err(MetalKernelError::LoadLibraryError(format!(
+                "{other} is not a valid kernel for gemm"
+            )));
+        }
+    };
+    let block_bytes = block_elements * bytes;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_threadgroup_memory_length(0, block_bytes.into());
+    encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
+    encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
+    encoder.set_buffer(2, Some(output), 0);
+    // TODO Tensor D
+
+    let grid_z = b;
+    if batched {
+        let byte_stride_a: usize = lhs_stride[lhs_stride.len() - 3] * bytes as usize;
+        let byte_stride_b: usize = rhs_stride[rhs_stride.len() - 3] * bytes as usize;
+        let byte_stride_c = m * n * bytes as usize;
+        // TODO byte_stride_d
+        let byte_stride_d = 0;
+
+        let buffer: Vec<u64> = vec![
+            byte_stride_a as _,
+            byte_stride_b as _,
+            byte_stride_c as _,
+            byte_stride_d as _,
+        ];
+        encoder.set_bytes(
+            10,
+            (buffer.len() * core::mem::size_of::<u64>()) as NSUInteger,
+            buffer.as_ptr() as *const NSUInteger as *const c_void,
+        );
+    }
+
+    let grid_size = MTLSize {
+        width: divide(n, n_group.into()),
+        height: divide(m, m_group.into()),
+        depth: grid_z as NSUInteger,
+    };
+    let group_size = MTLSize {
+        width: 32 * (m_splits as u64) * (n_splits as u64),
+        height: 1,
+        depth: 1,
+    };
+    encoder.use_resource(lhs_buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(grid_size, group_size);
+    Ok(())
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum SdpaDType {
     BF16,
@@ -1652,174 +1939,201 @@ pub fn call_sdpa_full(
     kernels: &Kernels,
     q_offset: usize,
     q_shape: &[usize],
+    q_strides: &[usize],
     q_buffer: &Buffer,
     k_offset: usize,
+    k_shape: &[usize],
+    k_strides: &[usize],
     k_buffer: &Buffer,
     v_offset: usize,
     v_buffer: &Buffer,
+    v_strides: &[usize],
+    mask_type: Option<SdpaDType>,
+    mask_buffer: Option<&Buffer>,
+    m_strides: Option<&[usize]>,
     output: &Buffer,
-    alpha: f32,
-    softcapping: f32,
+    o_strides: &[usize],
+    scale: f32,
+    do_causal: bool,
     itype: SdpaDType,
 ) -> Result<(), MetalKernelError> {
     #[derive(Debug)]
     #[repr(C)]
-    struct MLXFastAttentionParams {
-        m: i32,
-        n: i32,
-        k: i32,
-
-        ldq: i32, // ldq == ldo
-        ldk: i32,
-        ldv: i32,
-        lds: i32,
-        ldo: i32,
-
-        tiles_n: i32,
-        tiles_m: i32,
-
-        batch_stride_q: i32,
-        batch_stride_k: i32,
-        batch_stride_v: i32,
-        batch_stride_o: i32,
-
-        swizzle_log: i32,
-        gemm_n_iterations_aligned: i32,
-        gemm_k_iterations_aligned: i32,
-        gemm_sv_m_block_iterations: i32,
-
-        batch_ndim: i32,
-        alpha: f32,
-        softcapping: f32,
+    struct AttnParams {
+        b: i32,
+        h: i32,
+        d: i32,
+        ql: i32,
+        kl: i32,
+        gqa_factor: i32,
+        scale: f32,
+        nq: i32,
+        nk: i32,
+        nq_aligned: i32,
+        nk_aligned: i32,
+        ql_rem: i32,
+        kl_rem: i32,
+        ql_off: i32,
+        q_strides: [i64; 3],
+        k_strides: [i64; 3],
+        v_strides: [i64; 3],
+        o_strides: [i64; 3],
     }
 
-    let bk = q_shape.last().unwrap();
+    #[derive(Debug)]
+    #[repr(C)]
+    struct AttnMaskParams {
+        m_strides: [i64; 3],
+    }
 
-    const BN: usize = 16;
-    const BM: usize = 16;
-    const WM: usize = 2;
-    const WN: usize = 2;
+    const WM: usize = 4;
+    const WN: usize = 1;
 
-    let name = match (bk, itype) {
-        (32, SdpaDType::F16) => "steel_gemm_attention_bm_16_bn_16_bk_32_itype_half",
-        (64, SdpaDType::F16) => "steel_gemm_attention_bm_16_bn_16_bk_64_itype_half",
-        (96, SdpaDType::F16) => "steel_gemm_attention_bm_16_bn_16_bk_96_itype_half",
-        (128, SdpaDType::F16) => "steel_gemm_attention_bm_16_bn_16_bk_128_itype_half",
-        (256, SdpaDType::F16) => "steel_gemm_attention_bm_16_bn_16_bk_256_itype_half",
-        (32, SdpaDType::F32) => "steel_gemm_attention_bm_16_bn_16_bk_32_itype_float",
-        (64, SdpaDType::F32) => "steel_gemm_attention_bm_16_bn_16_bk_64_itype_float",
-        (96, SdpaDType::F32) => "steel_gemm_attention_bm_16_bn_16_bk_96_itype_float",
-        (128, SdpaDType::F32) => "steel_gemm_attention_bm_16_bn_16_bk_128_itype_float",
-        (256, SdpaDType::F32) => "steel_gemm_attention_bm_16_bn_16_bk_256_itype_float",
-        (other, SdpaDType::F16 | SdpaDType::F32) => {
-            return Err(MetalKernelError::SdpaHeadSizeMismatch {
-                variation: "full",
-                got: *other,
-                expected: vec![32, 64, 96, 128, 256],
-            })
-        }
-        (_, SdpaDType::BF16) => {
-            return Err(MetalKernelError::SdpaHeadDTypeMismatch {
-                variation: "full",
-                got: SdpaDType::BF16,
-            })
-        }
+    const BQ: usize = 32;
+    let bd = q_shape[q_shape.len() - 1];
+    let bk = if bd < 128 { 32 } else { 16 };
+
+    let b = q_shape[0];
+    let h = q_shape[1];
+    let d = q_shape[3];
+    let gqa_factor = q_shape[1] / k_shape[1];
+
+    let ql = q_shape[2];
+    let kl = k_shape[2];
+
+    let align_q = (ql % BQ) == 0;
+    let align_k = (kl % bk) == 0;
+    let has_mask = mask_buffer.is_some();
+
+    let itype_repr = match itype {
+        SdpaDType::BF16 => "bfloat16",
+        SdpaDType::F16 => "float16",
+        SdpaDType::F32 => "float32",
     };
+    let mask_repr = match mask_type {
+        Some(SdpaDType::BF16) => "bfloat16",
+        Some(SdpaDType::F16) => "float16",
+        Some(SdpaDType::F32) => "float32",
+        None => itype_repr,
+    };
+    let name =
+        format!("steel_attention_{itype_repr}_bq{BQ}_bk{bk}_bd{bd}_wm{WM}_wn{WN}_mask{mask_repr}");
 
-    let pipeline = kernels.load_pipeline(device, Source::Sdpa, name)?;
+    let constants = Some(ConstantValues::new(vec![
+        (200, Value::Bool(/* align_Q */ align_q)),
+        (201, Value::Bool(/* align_K */ align_k)),
+        (300, Value::Bool(/* has_mask */ has_mask)),
+        (301, Value::Bool(/* do_causal */ do_causal)),
+    ]));
+
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, &name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    // q = (bs, qhead, seq, hidden)
-    // k/v = (bs, kv_head, seq, hidden)
+    let nq = (ql + BQ - 1) / BQ;
+    let nk = (kl + bk - 1) / bk;
 
-    let qseq = q_shape[q_shape.len() - 2];
+    let nq_aligned = ql / BQ;
+    let nk_aligned = kl / bk;
 
-    let m = q_shape[q_shape.len() - 2];
-    let n = m;
-    let k = q_shape[q_shape.len() - 1];
-    let bs_out = q_shape[0] * q_shape[1];
-
-    let batch_shape = [q_shape[0] * q_shape[1]];
-    let dk = q_shape[q_shape.len() - 1];
-    let ldq = dk;
-    let ldk = dk;
-    let ldv = dk;
-    let lds = BN;
-    let ldo = dk;
-
-    let tn = 1;
-    let tm = m.div_ceil(BM);
-
-    let b_stride_q = dk * qseq;
-    let b_stride_k = dk * qseq;
-    let b_stride_v = dk * qseq;
-    let b_stride_o = dk * qseq;
-    let swizzle_log = 0;
-    let gemm_n_iterations_aligned = n.div_ceil(BN);
-    let gemm_k_iterations_aligned = k.div_ceil(*bk);
-    let gemm_sv_m_block_iterations = m.div_ceil(BM);
-    let batch_ndim = batch_shape.len();
-
-    let alpha = if softcapping != 1. {
-        alpha / softcapping
-    } else {
-        alpha
+    let params = AttnParams {
+        b: b as i32,
+        h: h as i32,
+        d: d as i32,
+        ql: ql as i32,
+        kl: kl as i32,
+        gqa_factor: gqa_factor as i32,
+        scale,
+        nq: nq as i32,
+        nk: nk as i32,
+        nq_aligned: nq_aligned as i32,
+        nk_aligned: nk_aligned as i32,
+        ql_rem: (ql - nq_aligned * BQ) as i32,
+        kl_rem: (kl - nk_aligned * bk) as i32,
+        ql_off: (kl - ql) as i32,
+        q_strides: [
+            q_strides[0] as i64,
+            q_strides[1] as i64,
+            q_strides[2] as i64,
+        ],
+        k_strides: [
+            k_strides[0] as i64,
+            k_strides[1] as i64,
+            k_strides[2] as i64,
+        ],
+        v_strides: [
+            v_strides[0] as i64,
+            v_strides[1] as i64,
+            v_strides[2] as i64,
+        ],
+        o_strides: [
+            o_strides[0] as i64,
+            o_strides[1] as i64,
+            o_strides[2] as i64,
+        ],
     };
 
-    let params = MLXFastAttentionParams {
-        m: m as i32,
-        n: n as i32,
-        k: k as i32,
-        ldq: ldq as i32,
-        ldk: ldk as i32,
-        ldv: ldv as i32,
-        lds: lds as i32,
-        ldo: ldo as i32,
-        tiles_n: tn,
-        tiles_m: tm as i32,
-        batch_stride_q: b_stride_q as i32,
-        batch_stride_k: b_stride_k as i32,
-        batch_stride_v: b_stride_v as i32,
-        batch_stride_o: b_stride_o as i32,
-        swizzle_log,
-        gemm_n_iterations_aligned: gemm_n_iterations_aligned as i32,
-        gemm_k_iterations_aligned: gemm_k_iterations_aligned as i32,
-        gemm_sv_m_block_iterations: gemm_sv_m_block_iterations as i32,
-        batch_ndim: batch_ndim as i32,
-        alpha,
-        softcapping,
-    };
-    let batch_strides = [b_stride_q, b_stride_k, b_stride_v, b_stride_o];
-
-    impl EncoderParam for MLXFastAttentionParams {
+    impl EncoderParam for AttnParams {
         fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
             encoder.set_bytes(
                 position,
-                core::mem::size_of::<MLXFastAttentionParams>() as u64,
-                &data as *const MLXFastAttentionParams as *const c_void,
+                core::mem::size_of::<AttnParams>() as u64,
+                &data as *const AttnParams as *const c_void,
             );
         }
     }
 
-    set_params!(
-        encoder,
-        (
-            (q_buffer, q_offset),
-            (k_buffer, k_offset),
-            (v_buffer, v_offset),
-            output,
-            params,
-            &batch_shape[..],
-            &batch_strides[..]
-        )
-    );
+    impl EncoderParam for AttnMaskParams {
+        fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+            encoder.set_bytes(
+                position,
+                core::mem::size_of::<AttnMaskParams>() as u64,
+                &data as *const AttnMaskParams as *const c_void,
+            );
+        }
+    }
+
+    if let Some(mask) = mask_buffer {
+        let mask_strides = m_strides.unwrap();
+        let mask_params = AttnMaskParams {
+            m_strides: [
+                mask_strides[0] as i64,
+                mask_strides[1] as i64,
+                mask_strides[2] as i64,
+            ],
+        };
+        encoder.use_resource(mask, metal::MTLResourceUsage::Read);
+
+        set_params!(
+            encoder,
+            (
+                (q_buffer, q_offset),
+                (k_buffer, k_offset),
+                (v_buffer, v_offset),
+                output,
+                params,
+                mask_params,
+                mask
+            )
+        );
+    } else {
+        set_params!(
+            encoder,
+            (
+                (q_buffer, q_offset),
+                (k_buffer, k_offset),
+                (v_buffer, v_offset),
+                output,
+                params
+            )
+        );
+    }
 
     let grid_dims = MTLSize {
-        width: 1,
-        height: tm as u64,
-        depth: bs_out as u64,
+        width: nq as u64,
+        height: h as u64,
+        depth: b as u64,
     };
     let group_dims = MTLSize {
         width: 32,
@@ -1831,10 +2145,11 @@ pub fn call_sdpa_full(
     encoder.use_resource(v_buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_dims, group_dims);
+
     Ok(())
 }
 
-/// SDPA full is supported when:
+/// SDPA vector is supported when:
 /// - q head dim == 64, 96, 128
 /// - no mask
 /// - q,k,v are contiguous
@@ -1902,7 +2217,7 @@ pub fn call_sdpa_vector(
         Value::Bool(/* sdpa_vector_has_mask */ false),
     )]));
 
-    let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, name, constants)?;
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, &name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -2020,7 +2335,7 @@ pub fn call_sdpa_vector_2pass(
         )]));
 
         let pipeline =
-            kernels.load_pipeline_with_constants(device, Source::Sdpa, name_pass1, constants)?;
+            kernels.load_pipeline_with_constants(device, Source::Sdpa, &name_pass1, constants)?;
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
@@ -2095,7 +2410,7 @@ pub fn call_sdpa_vector_2pass(
 
         let b = (q_shape[0] * q_shape[1]) as i32;
 
-        let pipeline = kernels.load_pipeline(device, Source::Sdpa, name_pass2)?;
+        let pipeline = kernels.load_pipeline(device, Source::Sdpa, &name_pass2)?;
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
@@ -2341,6 +2656,7 @@ pub enum GgmlDType {
     Q8K,
     F16,
     F32,
+    BF16,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2418,7 +2734,7 @@ pub fn call_quantized_matmul_mv_t(
             let align = 2;
             (nth0, nth1, align)
         }
-        GgmlDType::F16 | GgmlDType::Q8K => {
+        GgmlDType::F16 | GgmlDType::BF16 | GgmlDType::Q8K => {
             // Original implem uses rows
             let nth0 = 32;
             let nth1 = 1;
@@ -2456,6 +2772,7 @@ pub fn call_quantized_matmul_mv_t(
         GgmlDType::Q6K => "kernel_mul_mv_q6_K_f32",
         GgmlDType::Q8K => "kernel_mul_mv_q8_K_f32",
         GgmlDType::F16 => "kernel_mul_mv_f16_f32",
+        GgmlDType::BF16 => "kernel_mul_mv_bf16_f32",
         GgmlDType::F32 => "kernel_mul_mv_f32_f32",
     };
 
@@ -2491,6 +2808,114 @@ pub fn call_quantized_matmul_mv_t(
     encoder.use_resource(lhs, metal::MTLResourceUsage::Read);
     encoder.use_resource(rhs, metal::MTLResourceUsage::Read);
     encoder.use_resource(dst, metal::MTLResourceUsage::Write);
+
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
+/// - src0 is usually weight
+/// - src1 is usually xs
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mm_t(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    dst_shape: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    // Everything is in reverse
+    let ne00 = src0_shape[src0_shape.len() - 1] as i64;
+    let ne01 = src0_shape[src0_shape.len() - 2] as i64;
+    let ne02 = src0_shape[src0_shape.len() - 3] as i64;
+    let ne03 = src0_shape[src0_shape.len() - 4] as i64;
+
+    let nb01 = src0_stride[src0_stride.len() - 2] as i64;
+    let nb02 = src0_stride[src0_stride.len() - 3] as i64;
+    let nb03 = src0_stride[src0_stride.len() - 4] as i64;
+
+    let ne11 = src1_shape[src1_shape.len() - 2] as i64;
+    let ne12 = src1_shape[src1_shape.len() - 3] as i64;
+    let ne13 = src1_shape[src1_shape.len() - 4] as i64;
+
+    let nb10 = src1_stride[src1_stride.len() - 1] as i64;
+    let nb11 = src1_stride[src1_stride.len() - 2] as i64;
+    let nb12 = src1_stride[src1_stride.len() - 3] as i64;
+    let nb13 = src1_stride[src1_stride.len() - 4] as i64;
+
+    let ne0 = dst_shape[dst_shape.len() - 1] as i64;
+    let ne1 = dst_shape[dst_shape.len() - 2] as i64;
+    let r2 = (ne12 / ne02) as u32;
+    let r3 = (ne13 / ne03) as u32;
+
+    let thread_groups_count = MTLSize {
+        width: divide(ne11 as usize, 32),
+        height: divide(ne01 as usize, 64),
+        depth: (ne12 * ne13) as u64,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: 128,
+        height: 1,
+        depth: 1,
+    };
+    let name = match dtype {
+        GgmlDType::Q4_0 => "kernel_mul_mm_q4_0_f32",
+        GgmlDType::Q4_1 => "kernel_mul_mm_q4_1_f32",
+        GgmlDType::Q5_0 => "kernel_mul_mm_q5_0_f32",
+        GgmlDType::Q5_1 => "kernel_mul_mm_q5_1_f32",
+        GgmlDType::Q8_0 => "kernel_mul_mm_q8_0_f32",
+        GgmlDType::Q8_1 => "kernel_mul_mm_q8_1_f32",
+        GgmlDType::Q2K => "kernel_mul_mm_q2_K_f32",
+        GgmlDType::Q3K => "kernel_mul_mm_q3_K_f32",
+        GgmlDType::Q4K => "kernel_mul_mm_q4_K_f32",
+        GgmlDType::Q5K => "kernel_mul_mm_q5_K_f32",
+        GgmlDType::Q6K => "kernel_mul_mm_q6_K_f32",
+        GgmlDType::Q8K => "kernel_mul_mm_q8_K_f32",
+        GgmlDType::F16 => "kernel_mul_mm_f16_f32",
+        GgmlDType::BF16 => "kernel_mul_mm_bf16_f32",
+        GgmlDType::F32 => "kernel_mul_mm_f32_f32",
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            src0,
+            (src1, src1_offset),
+            (dst, dst_offset),
+            ne00,
+            ne02,
+            nb01,
+            nb02,
+            nb03,
+            ne12,
+            nb10,
+            nb11,
+            nb12,
+            nb13,
+            ne0,
+            ne1,
+            r2,
+            r3
+        )
+    );
+    encoder.use_resource(src0, metal::MTLResourceUsage::Read);
+    encoder.use_resource(src1, metal::MTLResourceUsage::Read);
+    encoder.use_resource(dst, metal::MTLResourceUsage::Write);
+
+    encoder.set_threadgroup_memory_length(0, 8192);
 
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
@@ -2645,6 +3070,426 @@ pub fn call_conv_transpose2d(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn call_arg_sort(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    nrows: usize,
+    ncols: usize,
+    ncols_pad: usize,
+    src: BufferOffset,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Sort, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (&src, dst, ncols as i64, ncols_pad as i64));
+
+    let thread_group_count = MTLSize {
+        width: 1,
+        height: nrows as u64,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: ncols_pad as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.use_resource(src.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(dst, metal::MTLResourceUsage::Write);
+    encoder.set_threadgroup_memory_length(0, (ncols_pad * 4).max(16) as u64);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum GemmDType {
+    BF16,
+    F16,
+    F32,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mlx_gemm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GemmDType,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs_stride: &[usize],
+    lhs_offset: usize,
+    lhs_buffer: &Buffer,
+    rhs_stride: &[usize],
+    rhs_offset: usize,
+    rhs_buffer: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    #[derive(Debug)]
+    #[repr(C)]
+    struct GemmParams {
+        m: i32,
+        n: i32,
+        k: i32,
+        lda: i32,
+        ldb: i32,
+        ldd: i32,
+        tiles_n: i32,
+        tiles_m: i32,
+        batch_stride_a: isize,
+        batch_stride_b: isize,
+        batch_stride_d: isize,
+        swizzle_log: i32,
+        gemm_k_iterations_aligned: i32,
+        batch_ndim: i32,
+    }
+    assert!(rhs_stride.len() >= 2);
+    assert!(lhs_stride.len() >= 2);
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+    // lhs has shape b, m, k
+    // We also allow for the case where the stride on the minor dimension is not as expected but
+    // there is a single element.
+    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+        (k as i32, false)
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        (m as i32, true)
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?;
+    };
+    // rhs has shape b, k, n
+    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+        (n as i32, false)
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        (k as i32, true)
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?;
+    };
+    let (bm, bn, bk, wn, wm) = (32, 32, 16, 2, 2);
+    // https://github.com/ml-explore/mlx/blob/02efb310cac667bc547d1b96f21596c221f84fe7/mlx/backend/metal/matmul.cpp#L422
+    let constants = Some(ConstantValues::new(vec![
+        (10, Value::Bool(/* has_batch */ b > 1)),
+        (100, Value::Bool(/* use_out_source */ false)),
+        (110, Value::Bool(/* do_axpby */ false)),
+        (200, Value::Bool(/* align_m */ m % bm == 0)),
+        (201, Value::Bool(/* align_n */ n % bn == 0)),
+        (202, Value::Bool(/* align_k */ k % bk == 0)),
+        (300, Value::Bool(/* do_gather */ false)),
+    ]));
+
+    let swizzle_log = 0;
+    let tile = 1 << swizzle_log;
+    let tn = n.div_ceil(bn);
+    let tm = m.div_ceil(bm);
+    let tn = tn * tile;
+    let tm = tm.div_ceil(tile);
+
+    let batch_stride_a = if lhs_stride.len() > 2 {
+        lhs_stride[lhs_stride.len() - 3]
+    } else {
+        m * k
+    };
+    let batch_stride_b = if rhs_stride.len() > 2 {
+        rhs_stride[rhs_stride.len() - 3]
+    } else {
+        n * k
+    };
+
+    let gemm_params = GemmParams {
+        m: m as i32,
+        n: n as i32,
+        k: k as i32,
+        lda,
+        ldb,
+        ldd: n as i32,
+        tiles_n: tn as i32,
+        tiles_m: tm as i32,
+        swizzle_log,
+        batch_stride_a: batch_stride_a as isize,
+        batch_stride_b: batch_stride_b as isize,
+        batch_stride_d: (m * n) as isize,
+        batch_ndim: 1i32,
+        gemm_k_iterations_aligned: (k / bk) as i32,
+    };
+    let batch_strides = [gemm_params.batch_stride_a, gemm_params.batch_stride_b];
+
+    // TODO(laurent): generate the name
+    // template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_bm" #bm "_bn" #bn "_bk" #bk "_wm" #wm "_wn" #wn)]]
+    let name = match (dtype, a_trans, b_trans) {
+        (GemmDType::F32, false, false) => "gemm_nn_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, true, false) => "gemm_tn_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, false, true) => "gemm_nt_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, true, true) => "gemm_tt_f32_f32_32_32_16_2_2",
+        (GemmDType::BF16, false, false) => "gemm_nn_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, true, false) => "gemm_tn_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, false, true) => "gemm_nt_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, true, true) => "gemm_tt_bf16_bf16_32_32_16_2_2",
+        (GemmDType::F16, false, false) => "gemm_nn_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, true, false) => "gemm_tn_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, false, true) => "gemm_nt_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, true, true) => "gemm_tt_f16_f16_32_32_16_2_2",
+    };
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
+    encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
+    encoder.set_buffer(3, Some(output), 0);
+    encoder.set_bytes(
+        4,
+        std::mem::size_of::<GemmParams>() as u64,
+        &gemm_params as *const GemmParams as *const c_void,
+    );
+    encoder.set_bytes(
+        4,
+        std::mem::size_of::<GemmParams>() as u64,
+        &gemm_params as *const GemmParams as *const c_void,
+    );
+    encoder.set_bytes(
+        6, // batch_shape
+        std::mem::size_of::<i32>() as u64,
+        &(b as i32) as *const i32 as *const c_void,
+    );
+    encoder.set_bytes(
+        7,
+        (std::mem::size_of::<isize>() * batch_strides.len()) as u64,
+        batch_strides.as_ptr() as *const c_void,
+    );
+
+    let grid_size = MTLSize {
+        width: tn as u64,
+        height: tm as u64,
+        depth: /* batch_size_out */ b as u64,
+    };
+    let group_size = MTLSize {
+        width: 32,
+        height: wn,
+        depth: wm,
+    };
+    encoder.use_resource(lhs_buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(grid_size, group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mlx_addmm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GemmDType,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs_stride: &[usize],
+    lhs_offset: usize,
+    lhs_buffer: &Buffer,
+    rhs_stride: &[usize],
+    rhs_offset: usize,
+    rhs_buffer: &Buffer,
+    c_stride: &[usize],
+    c_offset: usize,
+    c_buffer: &Buffer,
+    output: &Buffer,
+    alpha: f32,
+    beta: f32,
+) -> Result<(), MetalKernelError> {
+    #[derive(Debug)]
+    #[repr(C)]
+    struct GemmParams {
+        m: i32,
+        n: i32,
+        k: i32,
+        lda: i32,
+        ldb: i32,
+        ldd: i32,
+        tiles_n: i32,
+        tiles_m: i32,
+        batch_stride_a: isize,
+        batch_stride_b: isize,
+        batch_stride_d: isize,
+        swizzle_log: i32,
+        gemm_k_iterations_aligned: i32,
+        batch_ndim: i32,
+    }
+
+    #[derive(Debug)]
+    #[repr(C)]
+    struct GEMMAddMMParams {
+        ldc: i32,
+        fdc: i32,
+        batch_stride_c: isize,
+        alpha: f32,
+        beta: f32,
+    }
+
+    assert!(rhs_stride.len() >= 2);
+    assert!(lhs_stride.len() >= 2);
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+    // lhs has shape b, m, k
+    // We also allow for the case where the stride on the minor dimension is not as expected but
+    // there is a single element.
+    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+        (k as i32, false)
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        (m as i32, true)
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?;
+    };
+    // rhs has shape b, k, n
+    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+        (n as i32, false)
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        (k as i32, true)
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?;
+    };
+    let (bm, bn, bk, wn, wm) = (32, 32, 16, 2, 2);
+    // https://github.com/ml-explore/mlx/blob/02efb310cac667bc547d1b96f21596c221f84fe7/mlx/backend/metal/matmul.cpp#L422
+    let constants = Some(ConstantValues::new(vec![
+        (10, Value::Bool(/* has_batch */ b > 1)),
+        (100, Value::Bool(/* use_out_source */ true)),
+        (110, Value::Bool(/* do_axpby */ true)),
+        (200, Value::Bool(/* align_m */ m % bm == 0)),
+        (201, Value::Bool(/* align_n */ n % bn == 0)),
+        (202, Value::Bool(/* align_k */ k % bk == 0)),
+        (300, Value::Bool(/* do_gather */ false)),
+    ]));
+
+    let swizzle_log = 0;
+    let tile = 1 << swizzle_log;
+    let tn = n.div_ceil(bn);
+    let tm = m.div_ceil(bm);
+    let tn = tn * tile;
+    let tm = tm.div_ceil(tile);
+
+    let batch_stride_a = if lhs_stride.len() > 2 {
+        lhs_stride[lhs_stride.len() - 3]
+    } else {
+        m * k
+    };
+    let batch_stride_b = if rhs_stride.len() > 2 {
+        rhs_stride[rhs_stride.len() - 3]
+    } else {
+        n * k
+    };
+
+    let gemm_params = GemmParams {
+        m: m as i32,
+        n: n as i32,
+        k: k as i32,
+        lda,
+        ldb,
+        ldd: n as i32,
+        tiles_n: tn as i32,
+        tiles_m: tm as i32,
+        swizzle_log,
+        batch_stride_a: batch_stride_a as isize,
+        batch_stride_b: batch_stride_b as isize,
+        batch_stride_d: (m * n) as isize,
+        batch_ndim: 1i32,
+        gemm_k_iterations_aligned: (k / bk) as i32,
+    };
+    let gemm_addmm_params = GEMMAddMMParams {
+        ldc: c_stride[c_stride.len() - 2] as i32,
+        fdc: c_stride[c_stride.len() - 1] as i32,
+        batch_stride_c: (m * n) as isize,
+        alpha,
+        beta,
+    };
+    let batch_strides = [
+        gemm_params.batch_stride_a,
+        gemm_params.batch_stride_b,
+        gemm_addmm_params.batch_stride_c,
+    ];
+
+    // TODO(laurent): generate the name
+    // template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_bm" #bm "_bn" #bn "_bk" #bk "_wm" #wm "_wn" #wn)]]
+    let name = match (dtype, a_trans, b_trans) {
+        (GemmDType::F32, false, false) => "gemm_nn_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, true, false) => "gemm_tn_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, false, true) => "gemm_nt_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, true, true) => "gemm_tt_f32_f32_32_32_16_2_2",
+        (GemmDType::BF16, false, false) => "gemm_nn_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, true, false) => "gemm_tn_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, false, true) => "gemm_nt_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, true, true) => "gemm_tt_bf16_bf16_32_32_16_2_2",
+        (GemmDType::F16, false, false) => "gemm_nn_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, true, false) => "gemm_tn_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, false, true) => "gemm_nt_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, true, true) => "gemm_tt_f16_f16_32_32_16_2_2",
+    };
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
+    encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
+    encoder.set_buffer(2, Some(c_buffer), c_offset as NSUInteger);
+    encoder.set_buffer(3, Some(output), 0);
+    encoder.set_bytes(
+        4,
+        std::mem::size_of::<GemmParams>() as u64,
+        &gemm_params as *const GemmParams as *const c_void,
+    );
+    encoder.set_bytes(
+        5,
+        std::mem::size_of::<GEMMAddMMParams>() as u64,
+        &gemm_addmm_params as *const GEMMAddMMParams as *const c_void,
+    );
+    encoder.set_bytes(
+        6, // batch_shape
+        std::mem::size_of::<i32>() as u64,
+        &(b as i32) as *const i32 as *const c_void,
+    );
+    encoder.set_bytes(
+        7,
+        (std::mem::size_of::<isize>() * batch_strides.len()) as u64,
+        batch_strides.as_ptr() as *const c_void,
+    );
+
+    let grid_size = MTLSize {
+        width: tn as u64,
+        height: tm as u64,
+        depth: /* batch_size_out */ b as u64,
+    };
+    let group_size = MTLSize {
+        width: 32,
+        height: wn,
+        depth: wm,
+    };
+    encoder.use_resource(lhs_buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(grid_size, group_size);
+    Ok(())
+}
+
 pub fn call_const_fill(
     device: &Device,
     ep: impl EncoderProvider,
@@ -2662,6 +3507,78 @@ pub fn call_const_fill(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mul_and_act_contiguous(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    length: usize,
+    left: BufferOffset,
+    right: BufferOffset,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::MulAndAct, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, &left, &right, output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+
+    encoder.use_resource(left.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(right.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mul_and_act_strided(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    left_input: BufferOffset,
+    left_strides: &[usize],
+    right_input: BufferOffset,
+    right_strides: &[usize],
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::MulAndAct, name)?;
+
+    let num_dims: usize = shape.len();
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let width: usize = shape.iter().product();
+    let length: usize = shape.iter().product();
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
+
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            shape,
+            left_strides,
+            right_strides,
+            &left_input,
+            &right_input,
+            output
+        )
+    );
+    encoder.use_resource(left_input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(right_input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+
     Ok(())
 }
 

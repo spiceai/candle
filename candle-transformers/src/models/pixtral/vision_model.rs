@@ -1,5 +1,12 @@
+<<<<<<< HEAD
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b, rms_norm, Linear, RmsNorm, VarBuilder};
+=======
+use candle::{DType, Module, Result, Tensor, D};
+use candle_nn::{
+    layer_norm::RmsNormNonQuantized, linear_b, rms_norm_non_quant, Linear, RmsNorm, VarBuilder,
+};
+>>>>>>> spiceai
 
 fn default_act() -> candle_nn::Activation {
     candle_nn::Activation::Silu
@@ -167,18 +174,18 @@ impl Module for Mlp {
 
 #[derive(Debug, Clone)]
 struct AttentionLayer {
-    attention_norm: RmsNorm,
+    attention_norm: RmsNorm<RmsNormNonQuantized>,
     feed_forward: Mlp,
     attention: Attention,
-    ffn_norm: RmsNorm,
+    ffn_norm: RmsNorm<RmsNormNonQuantized>,
 }
 
 impl AttentionLayer {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let attention_norm = rms_norm(cfg.hidden_size, 1e-5, vb.pp("attention_norm"))?;
+        let attention_norm = rms_norm_non_quant(cfg.hidden_size, 1e-5, vb.pp("attention_norm"))?;
         let feed_forward = Mlp::new(cfg, vb.pp("feed_forward"))?;
         let attention = Attention::new(cfg, vb.pp("attention"))?;
-        let ffn_norm = rms_norm(cfg.hidden_size, 1e-5, vb.pp("ffn_norm"))?;
+        let ffn_norm = rms_norm_non_quant(cfg.hidden_size, 1e-5, vb.pp("ffn_norm"))?;
         Ok(Self {
             attention_norm,
             feed_forward,
@@ -300,7 +307,7 @@ impl RotaryEmbedding {
 #[derive(Debug, Clone)]
 pub struct Model {
     patch_conv: candle_nn::Conv2d,
-    ln_pre: RmsNorm,
+    ln_pre: RmsNorm<RmsNormNonQuantized>,
     transformer: Transformer,
     patch_positional_embedding: RotaryEmbedding,
     max_image_width: u32,
@@ -319,7 +326,7 @@ impl Model {
             conv2d_cfg,
             vb.pp("patch_conv"),
         )?;
-        let ln_pre = candle_nn::rms_norm(cfg.hidden_size, 1e-5, vb.pp("ln_pre"))?;
+        let ln_pre = rms_norm_non_quant(cfg.hidden_size, 1e-5, vb.pp("ln_pre"))?;
         let transformer = Transformer::new(cfg, vb.pp("transformer"))?;
         let patch_positional_embedding =
             RotaryEmbedding::new(cfg, vb.pp("patch_positional_embedding"))?;

@@ -1,5 +1,9 @@
 #![allow(clippy::redundant_closure_call)]
+<<<<<<< HEAD
 #![allow(clippy::useless_conversion)]
+=======
+use float8::F8E4M3;
+>>>>>>> spiceai
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
@@ -151,6 +155,8 @@ macro_rules! pydtype {
     };
 }
 
+pydtype!(i16, |v| v);
+pydtype!(i32, |v| v);
 pydtype!(i64, |v| v);
 pydtype!(u8, |v| v);
 pydtype!(u32, |v| v);
@@ -158,6 +164,7 @@ pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
 pydtype!(f64, |v| v);
+pydtype!(F8E4M3, f32::from);
 
 fn actual_index(t: &Tensor, dim: usize, index: i64) -> ::candle::Result<usize> {
     let dim = t.dim(dim)?;
@@ -200,11 +207,14 @@ trait MapDType {
         match t.dtype() {
             DType::U8 => self.f::<u8>(t),
             DType::U32 => self.f::<u32>(t),
+            DType::I16 => self.f::<i16>(t),
+            DType::I32 => self.f::<i32>(t),
             DType::I64 => self.f::<i64>(t),
             DType::BF16 => self.f::<bf16>(t),
             DType::F16 => self.f::<f16>(t),
             DType::F32 => self.f::<f32>(t),
             DType::F64 => self.f::<f64>(t),
+            DType::F8E4M3 => self.f::<F8E4M3>(t),
         }
     }
 }

@@ -1,9 +1,13 @@
+<<<<<<< HEAD
 //! Logit Processing and Sampling
 //!
 //! Functionality for modeling sampling strategies and logits processing in text generation
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
 //! and combinations thereof.
 use candle::{Context, DType, Error, Result, Tensor};
+=======
+use candle::{DType, Error, Result, Tensor};
+>>>>>>> spiceai
 use rand::{distr::Distribution, SeedableRng};
 
 #[derive(Clone, PartialEq, Debug)]

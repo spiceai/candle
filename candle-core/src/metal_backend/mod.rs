@@ -10,6 +10,14 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
 
+#[cfg(target_os = "ios")]
+pub const METAL_SHARED_BUFFER_STORAGE_MODE: MTLResourceOptions =
+    MTLResourceOptions::StorageModeShared;
+
+#[cfg(not(target_os = "ios"))]
+pub const METAL_SHARED_BUFFER_STORAGE_MODE: MTLResourceOptions =
+    MTLResourceOptions::StorageModeManaged;
+
 mod device;
 pub use device::{DeviceId, MetalDevice};
 
@@ -98,11 +106,14 @@ impl BackendStorage for MetalStorage {
         match self.dtype {
             DType::U8 => Ok(CpuStorage::U8(self.to_cpu()?)),
             DType::U32 => Ok(CpuStorage::U32(self.to_cpu()?)),
+            DType::I16 => Ok(CpuStorage::I16(self.to_cpu()?)),
+            DType::I32 => Ok(CpuStorage::I32(self.to_cpu()?)),
             DType::I64 => Ok(CpuStorage::I64(self.to_cpu()?)),
             DType::F16 => Ok(CpuStorage::F16(self.to_cpu()?)),
             DType::BF16 => Ok(CpuStorage::BF16(self.to_cpu()?)),
             DType::F32 => Ok(CpuStorage::F32(self.to_cpu()?)),
             DType::F64 => Ok(CpuStorage::F64(self.to_cpu()?)),
+            DType::F8E4M3 => Ok(CpuStorage::F64(self.to_cpu()?)),
         }
     }
 
@@ -366,6 +377,16 @@ impl BackendStorage for MetalStorage {
             (ReduceOp::Max, DType::BF16) => ("fast_max_bf16_strided", true, false),
             (ReduceOp::ArgMin, DType::BF16) => ("fast_argmin_bf16_strided", true, true),
             (ReduceOp::ArgMax, DType::BF16) => ("fast_argmax_bf16_strided", true, true),
+            (ReduceOp::Sum, DType::I16) => ("fast_sum_i16_strided", false, false),
+            (ReduceOp::Min, DType::I16) => ("fast_min_i16_strided", true, false),
+            (ReduceOp::Max, DType::I16) => ("fast_max_i16_strided", true, false),
+            (ReduceOp::ArgMin, DType::I16) => ("fast_argmin_i16_strided", true, true),
+            (ReduceOp::ArgMax, DType::I16) => ("fast_argmax_i16_strided", true, true),
+            (ReduceOp::Sum, DType::I32) => ("fast_sum_i32_strided", false, false),
+            (ReduceOp::Min, DType::I32) => ("fast_min_i32_strided", true, false),
+            (ReduceOp::Max, DType::I32) => ("fast_max_i32_strided", true, false),
+            (ReduceOp::ArgMin, DType::I32) => ("fast_argmin_i32_strided", true, true),
+            (ReduceOp::ArgMax, DType::I32) => ("fast_argmax_i32_strided", true, true),
             (ReduceOp::Sum, DType::I64) => ("fast_sum_i64_strided", false, false),
             (ReduceOp::Min, DType::I64) => ("fast_min_i64_strided", true, false),
             (ReduceOp::Max, DType::I64) => ("fast_max_i64_strided", true, false),
@@ -519,38 +540,65 @@ impl BackendStorage for MetalStorage {
                 (DType::U32, DType::BF16) => "cast_u32_bf16",
                 (DType::U32, DType::F16) => "cast_u32_f16",
                 (DType::U32, DType::F32) => "cast_u32_f32",
+                (DType::U32, DType::I16) => "cast_u32_i16",
+                (DType::U32, DType::I32) => "cast_u32_i32",
                 (DType::U32, DType::I64) => "cast_u32_i64",
                 (DType::U32, DType::U8) => "cast_u32_u8",
 
                 (DType::U8, DType::BF16) => "cast_u8_bf16",
                 (DType::U8, DType::F16) => "cast_u8_f16",
                 (DType::U8, DType::F32) => "cast_u8_f32",
+                (DType::U8, DType::I16) => "cast_u8_i16",
+                (DType::U8, DType::I32) => "cast_u8_i32",
                 (DType::U8, DType::I64) => "cast_u8_i64",
                 (DType::U8, DType::U32) => "cast_u8_u32",
 
                 (DType::F32, DType::BF16) => "cast_f32_bf16",
                 (DType::F32, DType::F16) => "cast_f32_f16",
+                (DType::F32, DType::I16) => "cast_f32_i16",
+                (DType::F32, DType::I32) => "cast_f32_i32",
                 (DType::F32, DType::I64) => "cast_f32_i64",
                 (DType::F32, DType::U32) => "cast_f32_u32",
                 (DType::F32, DType::U8) => "cast_f32_u8",
+
+                (DType::I16, DType::BF16) => "cast_i16_bf16",
+                (DType::I16, DType::F16) => "cast_i16_f16",
+                (DType::I16, DType::F32) => "cast_i16_f32",
+                (DType::I16, DType::U32) => "cast_i16_u32",
+                (DType::I16, DType::U8) => "cast_i16_u8",
+
+                (DType::I32, DType::BF16) => "cast_i32_bf16",
+                (DType::I32, DType::F16) => "cast_i32_f16",
+                (DType::I32, DType::F32) => "cast_i32_f32",
+                (DType::I32, DType::U32) => "cast_i32_u32",
+                (DType::I32, DType::U8) => "cast_i32_u8",
 
                 (DType::I64, DType::BF16) => "cast_i64_bf16",
                 (DType::I64, DType::F16) => "cast_i64_f16",
                 (DType::I64, DType::F32) => "cast_i64_f32",
                 (DType::I64, DType::U32) => "cast_i64_u32",
                 (DType::I64, DType::U8) => "cast_i64_u8",
+                (DType::I64, DType::F8E4M3) => "cast_i64_f8e4m3",
 
                 (DType::F16, DType::BF16) => "cast_f16_bf16",
                 (DType::F16, DType::F32) => "cast_f16_f32",
+                (DType::F16, DType::I16) => "cast_f16_i16",
+                (DType::F16, DType::I32) => "cast_f16_i32",
                 (DType::F16, DType::I64) => "cast_f16_i64",
                 (DType::F16, DType::U32) => "cast_f16_u32",
                 (DType::F16, DType::U8) => "cast_f16_u8",
 
                 (DType::BF16, DType::F16) => "cast_bf16_f16",
                 (DType::BF16, DType::F32) => "cast_bf16_f32",
+                (DType::BF16, DType::I16) => "cast_bf16_i16",
+                (DType::BF16, DType::I32) => "cast_bf16_i32",
                 (DType::BF16, DType::I64) => "cast_bf16_i64",
                 (DType::BF16, DType::U32) => "cast_bf16_u32",
                 (DType::BF16, DType::U8) => "cast_bf16_u8",
+
+                (DType::F8E4M3, DType::BF16) => "cast_f8e4m3_bf16",
+
+                (DType::F8E4M3, DType::F32) => "cast_f8e4m3_f32",
 
                 (left, right) => {
                     crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")
@@ -595,14 +643,21 @@ impl BackendStorage for MetalStorage {
                 (DType::U32, DType::BF16) => "cast_u32_bf16_strided",
                 (DType::U32, DType::F16) => "cast_u32_f16_strided",
                 (DType::U32, DType::F32) => "cast_u32_f32_strided",
-                (DType::U32, DType::I64) => "cast_u32_i64_strided",
                 (DType::U32, DType::U8) => "cast_u32_u8_strided",
+                (DType::U32, DType::I16) => "cast_u32_i16_strided",
+                (DType::U32, DType::I32) => "cast_u32_i32_strided",
+                (DType::U32, DType::I64) => "cast_u32_i64_strided",
 
                 (DType::U8, DType::BF16) => "cast_u8_bf16_strided",
                 (DType::U8, DType::F16) => "cast_u8_f16_strided",
                 (DType::U8, DType::F32) => "cast_u8_f32_strided",
+                (DType::U8, DType::I16) => "cast_u8_i16_strided",
+                (DType::U8, DType::I32) => "cast_u8_i32_strided",
                 (DType::U8, DType::I64) => "cast_u8_i64_strided",
                 (DType::U8, DType::U32) => "cast_u8_u32_strided",
+
+                (DType::I16, DType::F32) => "cast_i16_f32_strided",
+                (DType::I32, DType::F32) => "cast_i32_f32_strided",
 
                 (left, right) => {
                     crate::bail!("Metal strided to_dtype {left:?} {right:?} not implemented")
@@ -695,6 +750,8 @@ impl BackendStorage for MetalStorage {
                     ("usign", DType::F16) => contiguous_tiled::sign::HALF,
                     ("usign", DType::F32) => contiguous_tiled::sign::FLOAT,
                     ("usign", DType::BF16) => contiguous_tiled::sign::BFLOAT,
+                    ("usign", DType::I16) => contiguous_tiled::sign::I16,
+                    ("usign", DType::I32) => contiguous_tiled::sign::I32,
                     ("usign", DType::I64) => contiguous_tiled::sign::I64,
                     (name, dtype) => {
                         crate::bail!(
@@ -773,6 +830,8 @@ impl BackendStorage for MetalStorage {
                     ("usign", DType::F16) => contiguous::sign::HALF,
                     ("usign", DType::F32) => contiguous::sign::FLOAT,
                     ("usign", DType::BF16) => contiguous::sign::BFLOAT,
+                    ("usign", DType::I16) => contiguous::sign::I16,
+                    ("usign", DType::I32) => contiguous::sign::I32,
                     ("usign", DType::I64) => contiguous::sign::I64,
                     (name, dtype) => {
                         crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
@@ -904,6 +963,8 @@ impl BackendStorage for MetalStorage {
             (DType::U32, DType::F32) => "where_u32_f32",
             (DType::U8, DType::BF16) => "where_u8_bf16",
             (DType::U8, DType::F16) => "where_u8_f16",
+            (DType::U8, DType::I16) => "where_u8_i16",
+            (DType::U8, DType::I32) => "where_u8_i32",
             (DType::U8, DType::I64) => "where_u8_i64",
             (DType::U8, DType::U32) => "where_u8_u32",
             (DType::U8, DType::U8) => "where_u8_u8",
@@ -985,7 +1046,7 @@ impl BackendStorage for MetalStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
@@ -993,7 +1054,7 @@ impl BackendStorage for MetalStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
         let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
@@ -1044,8 +1105,9 @@ impl BackendStorage for MetalStorage {
                     vec![0, k_size * c_out, 1],
                     k_layout.start_offset(),
                 );
-                self.matmul(
+                self.matmul_with_alpha(
                     k,
+                    None,
                     (b_size, l_in, c_out * k_size, c_in),
                     &layout.transpose(1, 2)?,
                     &kernel_l_mm,
@@ -1176,7 +1238,7 @@ impl BackendStorage for MetalStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
@@ -1184,7 +1246,7 @@ impl BackendStorage for MetalStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
@@ -1495,6 +1557,12 @@ impl BackendStorage for MetalStorage {
             (DType::U32, DType::F32) => "sa_u32_f32",
             (DType::U32, DType::F16) => "sa_u32_f16",
             (DType::U32, DType::BF16) => "sa_u32_bf16",
+            (DType::I16, DType::F32) => "sa_i16_f32",
+            (DType::I16, DType::F16) => "sa_i16_f16",
+            (DType::I16, DType::BF16) => "sa_i16_bf16",
+            (DType::I32, DType::F32) => "sa_i32_f32",
+            (DType::I32, DType::F16) => "sa_i32_f16",
+            (DType::I32, DType::BF16) => "sa_i32_bf16",
             (DType::I64, DType::F32) => "sa_i64_f32",
             (DType::I64, DType::F16) => "sa_i64_f16",
             (DType::I64, DType::BF16) => "sa_i64_bf16",
@@ -1550,6 +1618,14 @@ impl BackendStorage for MetalStorage {
             (DType::U32, DType::F16) => "is_u32_f16",
             (DType::U32, DType::BF16) => "is_u32_bf16",
 
+            (DType::I16, DType::F32) => "is_i16_f32",
+            (DType::I16, DType::F16) => "is_i16_f16",
+            (DType::I16, DType::BF16) => "is_i16_bf16",
+
+            (DType::I32, DType::F32) => "is_i32_f32",
+            (DType::I32, DType::F16) => "is_i32_f16",
+            (DType::I32, DType::BF16) => "is_i32_bf16",
+
             (DType::I64, DType::U8) => "is_i64_u8",
             (DType::I64, DType::U32) => "is_i64_u32",
             (DType::I64, DType::I64) => "is_i64_i64",
@@ -1598,9 +1674,27 @@ impl BackendStorage for MetalStorage {
             return Err(crate::Error::RequiresContiguous { op: "index-add" }.bt());
         };
         let name = match (ids.dtype, self.dtype) {
+            (DType::I16, DType::BF16) => "ia_i16_bf16",
+            (DType::I16, DType::F16) => "ia_i16_f16",
+            (DType::I16, DType::F32) => "ia_i16_f32",
+            (DType::I16, DType::I32) => "ia_i16_i32",
+            (DType::I16, DType::I64) => "ia_i16_i64",
+            (DType::I16, DType::U32) => "ia_i16_u32",
+            (DType::I16, DType::U8) => "ia_i16_u8",
+
+            (DType::I32, DType::BF16) => "ia_i32_bf16",
+            (DType::I32, DType::F16) => "ia_i32_f16",
+            (DType::I32, DType::F32) => "ia_i32_f32",
+            (DType::I32, DType::I32) => "ia_i32_i32",
+            (DType::I32, DType::I64) => "ia_i32_i64",
+            (DType::I32, DType::U32) => "ia_i32_u32",
+            (DType::I32, DType::U8) => "ia_i32_u8",
+
             (DType::I64, DType::BF16) => "ia_i64_bf16",
             (DType::I64, DType::F16) => "ia_i64_f16",
             (DType::I64, DType::F32) => "ia_i64_f32",
+            (DType::I64, DType::I16) => "ia_i64_i16",
+            (DType::I64, DType::I32) => "ia_i64_i32",
             (DType::I64, DType::I64) => "ia_i64_i64",
             (DType::I64, DType::U32) => "ia_i64_u32",
             (DType::I64, DType::U8) => "ia_i64_u8",
@@ -1608,6 +1702,8 @@ impl BackendStorage for MetalStorage {
             (DType::U32, DType::BF16) => "ia_u32_bf16",
             (DType::U32, DType::F16) => "ia_u32_f16",
             (DType::U32, DType::F32) => "ia_u32_f32",
+            (DType::U32, DType::I16) => "ia_u32_i16",
+            (DType::U32, DType::I32) => "ia_u32_i32",
             (DType::U32, DType::I64) => "ia_u32_i64",
             (DType::U32, DType::U32) => "ia_u32_u32",
             (DType::U32, DType::U8) => "ia_u32_u8",
@@ -1615,6 +1711,8 @@ impl BackendStorage for MetalStorage {
             (DType::U8, DType::BF16) => "ia_u8_bf16",
             (DType::U8, DType::F16) => "ia_u8_f16",
             (DType::U8, DType::F32) => "ia_u8_f32",
+            (DType::U8, DType::I16) => "ia_u8_i16",
+            (DType::U8, DType::I32) => "ia_u8_i32",
             (DType::U8, DType::I64) => "ia_u8_i64",
             (DType::U8, DType::U32) => "ia_u8_u32",
             (DType::U8, DType::U8) => "ia_u8_u8",
@@ -1645,27 +1743,45 @@ impl BackendStorage for MetalStorage {
         Ok(acc)
     }
 
-    fn matmul(
+    fn matmul_with_alpha_beta(
         &self,
         rhs: &Self,
+        c: &mut Self,
+        s: Option<f64>,
         (b, m, n, k): (usize, usize, usize, usize),
         lhs_l: &Layout,
         rhs_l: &Layout,
-    ) -> Result<Self> {
-        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
+        c_l: &Layout,
+    ) -> Result<()> {
+        let elem_count = b * m * n;
+
+        match c_l.contiguous_offsets() {
+            Some((o1, o2)) => {
+                if o1 != 0 {
+                    crate::bail!("`c` start offset must be 0");
+                }
+                if o2 != elem_count {
+                    crate::bail!("`c` end offset must be {}", elem_count)
+                }
+            }
+            None => crate::bail!("`c` has to be contiguous"),
+        };
+
         let command_buffer = self.device.command_buffer()?;
-        command_buffer.set_label("matmul");
+        command_buffer.set_label("matmul_with_alpha_beta");
+
         let dtype = match self.dtype {
             DType::F32 => candle_metal_kernels::GemmDType::F32,
             DType::F16 => candle_metal_kernels::GemmDType::F16,
             DType::BF16 => candle_metal_kernels::GemmDType::BF16,
             dtype => {
-                return Err(
-                    MetalError::Message(format!("mlx matmul doesn't support {dtype:?}")).into(),
-                )
+                return Err(MetalError::Message(format!(
+                    "matmul_with_alpha_beta doesn't support {dtype:?}"
+                ))
+                .into())
             }
         };
-        candle_metal_kernels::call_mlx_gemm(
+        candle_metal_kernels::call_mlx_addmm(
             &self.device.device,
             &command_buffer,
             &self.device.kernels,
@@ -1677,10 +1793,108 @@ impl BackendStorage for MetalStorage {
             rhs_l.stride(),
             rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
             &rhs.buffer,
-            &buffer,
+            c_l.stride(),
+            c_l.start_offset() * c.dtype.size_in_bytes(),
+            &c.buffer,
+            &c.buffer,
+            s.unwrap_or(1.) as f32,
+            1.,
         )
         .map_err(MetalError::from)?;
 
+        Ok(())
+    }
+
+    fn matmul_with_alpha(
+        &self,
+        rhs: &Self,
+        s: Option<f64>,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        let buffer = self
+            .device
+            .new_buffer(b * m * n, self.dtype, "matmul_with_alpha")?;
+        let command_buffer = self.device.command_buffer()?;
+        command_buffer.set_label("matmul_with_alpha");
+        if self.dtype == DType::BF16 {
+            if s.unwrap_or(1.) != 1. {
+                return Err(
+                    MetalError::Message(format!("mlx matmul doesn't support alpha {s:?}")).into(),
+                );
+            }
+            candle_metal_kernels::call_mlx_gemm(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                candle_metal_kernels::GemmDType::BF16,
+                (b, m, n, k),
+                lhs_l.stride(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
+                &self.buffer,
+                rhs_l.stride(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+                &rhs.buffer,
+                &buffer,
+            )
+            .map_err(MetalError::from)?;
+        } else if self.device.use_mlx_mm && s.unwrap_or(1.) == 1. {
+            let dtype = match self.dtype {
+                DType::F32 => candle_metal_kernels::GemmDType::F32,
+                DType::F16 => candle_metal_kernels::GemmDType::F16,
+                DType::BF16 => candle_metal_kernels::GemmDType::BF16,
+                dtype => {
+                    return Err(MetalError::Message(format!(
+                        "mlx matmul doesn't support {dtype:?}"
+                    ))
+                    .into())
+                }
+            };
+            candle_metal_kernels::call_mlx_gemm(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                dtype,
+                (b, m, n, k),
+                lhs_l.stride(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
+                &self.buffer,
+                rhs_l.stride(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+                &rhs.buffer,
+                &buffer,
+            )
+            .map_err(MetalError::from)?;
+        } else {
+            let name = match self.dtype {
+                DType::F32 => "sgemm",
+                DType::F16 => "hgemm",
+                dtype => {
+                    return Err(
+                        MetalError::Message(format!("matmul doesn't support {dtype:?}")).into(),
+                    )
+                }
+            };
+
+            candle_metal_kernels::call_gemm(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                name,
+                (b, m, n, k),
+                lhs_l.stride(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
+                &self.buffer,
+                rhs_l.stride(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+                &rhs.buffer,
+                &buffer,
+                s.unwrap_or(1.) as f32,
+                0.,
+            )
+            .map_err(MetalError::from)?;
+        }
         Ok(Self::new(
             buffer,
             self.device.clone(),
@@ -1725,6 +1939,8 @@ impl BackendStorage for MetalStorage {
                 DType::F32 => candle_metal_kernels::copy2d::FLOAT,
                 DType::F16 => candle_metal_kernels::copy2d::HALF,
                 DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
+                DType::I16 => candle_metal_kernels::copy2d::I16,
+                DType::I32 => candle_metal_kernels::copy2d::I32,
                 DType::I64 => candle_metal_kernels::copy2d::I64,
                 DType::U32 => candle_metal_kernels::copy2d::U32,
                 DType::U8 => candle_metal_kernels::copy2d::U8,
@@ -1771,6 +1987,8 @@ impl BackendStorage for MetalStorage {
                 DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
                 DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
                 DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
+                DType::I16 => candle_metal_kernels::unary::strided::copy::I16,
+                DType::I32 => candle_metal_kernels::unary::strided::copy::I32,
                 DType::I64 => candle_metal_kernels::unary::strided::copy::I64,
                 DType::U32 => candle_metal_kernels::unary::strided::copy::U32,
                 DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
@@ -1861,6 +2079,28 @@ impl MetalStorage {
                 ("lt", DType::BF16) => (contiguous::lt::BFLOAT, DType::U8),
                 ("ge", DType::BF16) => (contiguous::ge::BFLOAT, DType::U8),
                 ("gt", DType::BF16) => (contiguous::gt::BFLOAT, DType::U8),
+
+                ("add", DType::I16) => (contiguous::add::I16, self.dtype),
+                ("sub", DType::I16) => (contiguous::sub::I16, self.dtype),
+                ("mul", DType::I16) => (contiguous::mul::I16, self.dtype),
+                ("div", DType::I16) => (contiguous::div::I16, self.dtype),
+                ("eq", DType::I16) => (contiguous::eq::I16, DType::U8),
+                ("ne", DType::I16) => (contiguous::ne::I16, DType::U8),
+                ("le", DType::I16) => (contiguous::le::I16, DType::U8),
+                ("lt", DType::I16) => (contiguous::lt::I16, DType::U8),
+                ("ge", DType::I16) => (contiguous::ge::I16, DType::U8),
+                ("gt", DType::I16) => (contiguous::gt::I16, DType::U8),
+
+                ("add", DType::I32) => (contiguous::add::I32, self.dtype),
+                ("sub", DType::I32) => (contiguous::sub::I32, self.dtype),
+                ("mul", DType::I32) => (contiguous::mul::I32, self.dtype),
+                ("div", DType::I32) => (contiguous::div::I32, self.dtype),
+                ("eq", DType::I32) => (contiguous::eq::I32, DType::U8),
+                ("ne", DType::I32) => (contiguous::ne::I32, DType::U8),
+                ("le", DType::I32) => (contiguous::le::I32, DType::U8),
+                ("lt", DType::I32) => (contiguous::lt::I32, DType::U8),
+                ("ge", DType::I32) => (contiguous::ge::I32, DType::U8),
+                ("gt", DType::I32) => (contiguous::gt::I32, DType::U8),
 
                 ("add", DType::I64) => (contiguous::add::I64, self.dtype),
                 ("sub", DType::I64) => (contiguous::sub::I64, self.dtype),
@@ -1955,6 +2195,32 @@ impl MetalStorage {
                 ("ge", DType::BF16) => (strided::ge::BFLOAT, DType::U8),
                 ("gt", DType::BF16) => (strided::gt::BFLOAT, DType::U8),
 
+                ("badd", DType::I16) => (strided::add::I16, self.dtype),
+                ("bsub", DType::I16) => (strided::sub::I16, self.dtype),
+                ("bmul", DType::I16) => (strided::mul::I16, self.dtype),
+                ("bdiv", DType::I16) => (strided::div::I16, self.dtype),
+                ("bminimum", DType::I16) => (strided::min::I16, self.dtype),
+                ("bmaximum", DType::I16) => (strided::max::I16, self.dtype),
+                ("eq", DType::I16) => (strided::eq::I16, DType::U8),
+                ("ne", DType::I16) => (strided::ne::I16, DType::U8),
+                ("le", DType::I16) => (strided::le::I16, DType::U8),
+                ("lt", DType::I16) => (strided::lt::I16, DType::U8),
+                ("ge", DType::I16) => (strided::ge::I16, DType::U8),
+                ("gt", DType::I16) => (strided::gt::I16, DType::U8),
+
+                ("badd", DType::I32) => (strided::add::I32, self.dtype),
+                ("bsub", DType::I32) => (strided::sub::I32, self.dtype),
+                ("bmul", DType::I32) => (strided::mul::I32, self.dtype),
+                ("bdiv", DType::I32) => (strided::div::I32, self.dtype),
+                ("bminimum", DType::I32) => (strided::min::I32, self.dtype),
+                ("bmaximum", DType::I32) => (strided::max::I32, self.dtype),
+                ("eq", DType::I32) => (strided::eq::I32, DType::U8),
+                ("ne", DType::I32) => (strided::ne::I32, DType::U8),
+                ("le", DType::I32) => (strided::le::I32, DType::U8),
+                ("lt", DType::I32) => (strided::lt::I32, DType::U8),
+                ("ge", DType::I32) => (strided::ge::I32, DType::U8),
+                ("gt", DType::I32) => (strided::gt::I32, DType::U8),
+
                 ("badd", DType::I64) => (strided::add::I64, self.dtype),
                 ("bsub", DType::I64) => (strided::sub::I64, self.dtype),
                 ("bmul", DType::I64) => (strided::mul::I64, self.dtype),
@@ -2019,19 +2285,12 @@ impl MetalStorage {
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
-        let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
-
-        let buffer = self.device.new_buffer_managed(size)?;
-        {
-            let command_buffer = self.device.command_buffer()?;
-            command_buffer.set_label("to_cpu");
-            let blit = command_buffer.new_blit_command_encoder();
-            blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
-            blit.end_encoding();
-        }
         self.device.wait_until_completed()?;
-        Ok(read_to_vec(&buffer, self.count))
+
+        let ptr = self.buffer.contents() as *mut T;
+        assert!(!ptr.is_null());
+        let slice = unsafe { std::slice::from_raw_parts(ptr, self.count) };
+        Ok(slice.to_vec())
     }
 }
 
@@ -2045,7 +2304,7 @@ impl BackendDevice for MetalDevice {
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
             [299792458].as_ptr() as *const c_void,
             4,
-            MTLResourceOptions::StorageModeManaged,
+            METAL_SHARED_BUFFER_STORAGE_MODE,
         )));
         let commands = device::Commands::new(command_queue)?;
         Ok(Self {
@@ -2055,6 +2314,8 @@ impl BackendDevice for MetalDevice {
             buffers: Arc::new(RwLock::new(HashMap::new())),
             kernels,
             seed,
+            seed_value: Arc::new(RwLock::new(299792458)),
+            use_mlx_mm,
         })
     }
 
@@ -2089,15 +2350,55 @@ impl BackendDevice for MetalDevice {
         ))
     }
 
+    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        let name = match dtype {
+            DType::U8 => "fill_u8",
+            DType::U32 => "fill_u32",
+            DType::I64 => "fill_i64",
+            DType::F16 => "fill_f16",
+            DType::BF16 => "fill_bf16",
+            DType::F32 => "fill_f32",
+            DType::I32 => "fill_i32",
+            DType::I16 => "fill_i16",
+            DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
+            DType::F64 => {
+                let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
+                return self.storage_from_cpu_storage(&cpu_storage);
+            }
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-ones")?;
+        let command_buffer = self.command_buffer()?;
+        candle_metal_kernels::call_const_fill(
+            &self.device,
+            &command_buffer,
+            &self.kernels,
+            name,
+            shape.elem_count(),
+            &buffer,
+            1.,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
     fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
         let (count, buffer) = match T::cpu_storage_ref(s) {
             CpuStorageRef::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::I16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::I32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
         };
         Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
     }
@@ -2106,11 +2407,14 @@ impl BackendDevice for MetalDevice {
         let (count, buffer) = match storage {
             CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
         };
         Ok(Self::Storage::new(
             buffer?,
@@ -2208,17 +2512,16 @@ impl BackendDevice for MetalDevice {
         }
         seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
 
+        *self.seed_value.write().unwrap() = seed as u64;
+
         Ok(())
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
+        Ok(*self.seed_value.read().unwrap())
     }
 
     fn synchronize(&self) -> Result<()> {
         self.wait_until_completed()
     }
-}
-
-fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
-    let ptr = buffer.contents() as *const T;
-    assert!(!ptr.is_null());
-    let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
-    slice.to_vec()
 }
