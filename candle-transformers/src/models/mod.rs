@@ -88,6 +88,7 @@ pub mod quantized_mixformer;
 pub mod quantized_moondream;
 pub mod quantized_mpt;
 pub mod quantized_phi;
+pub mod quantized_phi3;
 pub mod quantized_qwen2;
 pub mod quantized_recurrent_gemma;
 pub mod quantized_rwkv_v5;

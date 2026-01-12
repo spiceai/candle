@@ -1,3 +1,5 @@
+//! A `VarMap` is a store that holds named variables.
+//!
 use candle::{DType, Device, Result, Shape, Tensor, Var};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -111,11 +113,6 @@ impl VarMap {
         let tensor = var.as_tensor().clone();
         tensor_data.insert(path.to_string(), var);
         Ok(tensor)
-    }
-
-    /// Retrieve or add a new variable.
-    pub fn get_unchecked(&self, _path: &str, _dtype: DType, _device: &Device) -> Result<Tensor> {
-        candle::bail!("`get_unchecked` does not make sense for `VarMap`, use `get`.");
     }
 
     pub fn data(&self) -> &Mutex<HashMap<String, Var>> {

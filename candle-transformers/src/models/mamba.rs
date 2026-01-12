@@ -7,7 +7,7 @@
 //! Based on Laurent Mazare's rust implementation: [mamba.rs](https://github.com/LaurentMazare/mamba.rs)
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm::RmsNormNonQuantized, RmsNorm, VarBuilder};
+use candle_nn::{RmsNorm, VarBuilder};
 
 const D_CONV: usize = 4;
 const D_STATE: usize = 16;
@@ -160,12 +160,12 @@ impl MambaBlock {
 #[derive(Clone, Debug)]
 pub struct ResidualBlock {
     mixer: MambaBlock,
-    norm: RmsNorm<RmsNormNonQuantized>,
+    norm: RmsNorm,
 }
 
 impl ResidualBlock {
     pub fn new(layer_index: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let norm = candle_nn::rms_norm_non_quant(cfg.d_model, 1e-5, vb.pp("norm"))?;
+        let norm = candle_nn::rms_norm(cfg.d_model, 1e-5, vb.pp("norm"))?;
         let mixer = MambaBlock::new(layer_index, cfg, vb.pp("mixer"))?;
         Ok(Self { mixer, norm })
     }
@@ -180,7 +180,7 @@ impl ResidualBlock {
 pub struct Model {
     embedding: candle_nn::Embedding,
     layers: Vec<ResidualBlock>,
-    norm_f: RmsNorm<RmsNormNonQuantized>,
+    norm_f: RmsNorm,
     lm_head: Linear,
     dtype: DType,
 }
@@ -194,7 +194,7 @@ impl Model {
             let layer = ResidualBlock::new(layer_idx, cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm_f = candle_nn::rms_norm_non_quant(cfg.d_model, 1e-5, vb.pp("norm_f"))?;
+        let norm_f = candle_nn::rms_norm(cfg.d_model, 1e-5, vb.pp("norm_f"))?;
         let lm_head = Linear::from_weights(embedding.embeddings().clone(), None);
         Ok(Self {
             embedding,

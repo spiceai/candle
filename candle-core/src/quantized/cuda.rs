@@ -431,7 +431,6 @@ impl QCudaStorage {
         match self.dtype {
             GgmlDType::F32 => deq::<f32>(&buffer, block_len, &mut out)?,
             GgmlDType::F16 => deq::<half::f16>(&buffer, block_len, &mut out)?,
-            GgmlDType::BF16 => deq::<half::bf16>(&buffer, block_len, &mut out)?,
             GgmlDType::Q4_0 => deq::<crate::quantized::BlockQ4_0>(&buffer, block_len, &mut out)?,
             GgmlDType::Q4_1 => deq::<crate::quantized::BlockQ4_1>(&buffer, block_len, &mut out)?,
             GgmlDType::Q5_0 => deq::<crate::quantized::BlockQ5_0>(&buffer, block_len, &mut out)?,
@@ -477,92 +476,6 @@ impl QCudaStorage {
         Ok(())
     }
 
-    pub fn quantize_imatrix(
-        &mut self,
-        src: &CudaStorage,
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()> {
-        // Run the quantization on cpu.
-        let src = match &src.slice {
-            crate::cuda_backend::CudaStorageSlice::F32(data) => {
-                self.device.dtoh_sync_copy(data).w()?
-            }
-            _ => crate::bail!("only f32 can be quantized"),
-        };
-        let src_len = src.len();
-        let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
-        let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
-        qcpu_storage.quantize_imatrix(&src, imatrix_weights, n_per_row)?;
-        let data = qcpu_storage.data()?;
-        let padded_len =
-            data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
-        let mut inner = unsafe { self.device.alloc::<u8>(padded_len).w()? };
-        self.device
-            .htod_sync_copy_into(data.as_ref(), &mut inner.slice_mut(..data.len()))
-            .w()?;
-        self.data = PaddedCudaSlice {
-            inner,
-            len: data.len(),
-        };
-        Ok(())
-    }
-
-    pub fn quantize_imatrix_onto(
-        &mut self,
-        src: &crate::CpuStorage,
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()> {
-        // Run the quantization on cpu.
-        let src_len = src.as_slice::<f32>()?.len();
-        let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
-
-        if let QStorage::Cpu(storage) = &mut qcpu_storage {
-            storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
-        } else {
-            unreachable!()
-        }
-
-        let data = qcpu_storage.data()?;
-        let padded_len =
-            data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
-        let mut inner = unsafe { self.device.alloc::<u8>(padded_len).w()? };
-        self.device
-            .htod_sync_copy_into(data.as_ref(), &mut inner.slice_mut(..data.len()))
-            .w()?;
-        self.data = PaddedCudaSlice {
-            inner,
-            len: data.len(),
-        };
-        Ok(())
-    }
-
-    pub fn quantize_onto(&mut self, src: &crate::CpuStorage) -> Result<()> {
-        // Run the quantization on cpu.
-        let src_len = src.as_slice::<f32>()?.len();
-        let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
-
-        if let QStorage::Cpu(storage) = &mut qcpu_storage {
-            storage.from_float(src.as_slice::<f32>()?)?;
-        } else {
-            unreachable!()
-        }
-
-        let data = qcpu_storage.data()?;
-        let padded_len =
-            data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
-        let mut inner = unsafe { self.device.alloc::<u8>(padded_len).w()? };
-        self.device
-            .htod_sync_copy_into(data.as_ref(), &mut inner.slice_mut(..data.len()))
-            .w()?;
-        self.data = PaddedCudaSlice {
-            inner,
-            len: data.len(),
-        };
-        Ok(())
-    }
-
     pub fn storage_size_in_bytes(&self) -> usize {
         self.data.len
     }
@@ -588,12 +501,6 @@ impl QCudaStorage {
         } else {
             self.dequantize_matmul(self_shape, storage, layout)
         }
-    }
-
-    pub fn data(&self) -> Result<Vec<u8>> {
-        self.device
-            .dtoh_sync_copy(&self.data.inner.slice(..self.data.len))
-            .w()
     }
 }
 
@@ -658,7 +565,7 @@ impl QCudaStorage {
         let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
             let data_f32 = self.dequantize(n * k)?;
             let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
-            storage.matmul_with_alpha(&data_f32, None, (b, m, n, k), layout, &rhs_l)?
+            storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?
         } else {
             let storage = storage.as_cuda_slice::<f32>()?;
             let storage = match layout.contiguous_offsets() {

@@ -168,23 +168,9 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn matmul_with_alpha_beta(
+    fn matmul(
         &self,
         _: &Self,
-        _: &mut Self,
-        _: Option<f64>,
-        _: (usize, usize, usize, usize),
-        _: &Layout,
-        _: &Layout,
-        _: &Layout,
-    ) -> Result<()> {
-        Err(Error::NotCompiledWithMetalSupport)
-    }
-
-    fn matmul_with_alpha(
-        &self,
-        _: &Self,
-        _: Option<f64>,
         _: (usize, usize, usize, usize),
         _: &Layout,
         _: &Layout,
@@ -233,10 +219,6 @@ impl crate::backend::BackendDevice for MetalDevice {
     }
 
     fn set_seed(&self, _: u64) -> Result<()> {
-        Err(Error::NotCompiledWithMetalSupport)
-    }
-
-    fn get_current_seed(&self) -> Result<u64> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 

@@ -7,8 +7,8 @@
 
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{
-    conv1d_no_bias, layer_norm::RmsNormNonQuantized, linear, linear_no_bias, ops::softmax_last_dim,
-    rms_norm_non_quant, Conv1d, Conv1dConfig, Func, Linear, RmsNorm, VarBuilder,
+    conv1d_no_bias, linear, linear_no_bias, ops::softmax_last_dim, rms_norm, Conv1d, Conv1dConfig,
+    Func, Linear, RmsNorm, VarBuilder,
 };
 use std::sync::Arc;
 
@@ -459,16 +459,16 @@ impl SequenceMixer {
 #[derive(Debug, Clone)]
 struct DecoderLayer {
     mlp: MLP,
-    norm1: RmsNorm<RmsNormNonQuantized>,
-    norm2: RmsNorm<RmsNormNonQuantized>,
+    norm1: RmsNorm,
+    norm2: RmsNorm,
     mixer: SequenceMixer,
 }
 
 impl DecoderLayer {
     fn new(layer_idx: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        let norm1 = rms_norm_non_quant(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("norm1"))?;
-        let norm2 = rms_norm_non_quant(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("norm2"))?;
+        let norm1 = rms_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("norm1"))?;
+        let norm2 = rms_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("norm2"))?;
 
         let l_attn = cfg.alt_mixer_layers.contains(&layer_idx);
         let sw_attn = cfg.alt_mixer_2_layers.contains(&layer_idx);
@@ -509,7 +509,7 @@ impl DecoderLayer {
 pub struct Model {
     embed_tokens: super::with_tracing::Embedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm<RmsNormNonQuantized>,
+    norm: RmsNorm,
     lm_head: Linear,
     sliding_window: usize,
     device: Device,
@@ -528,7 +528,7 @@ impl Model {
             let layer = DecoderLayer::new(layer_idx, cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = rms_norm_non_quant(cfg.hidden_size, cfg.layer_norm_epsilon, vb_m.pp("ln_f"))?;
+        let norm = rms_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb_m.pp("ln_f"))?;
         Ok(Self {
             embed_tokens,
             layers,

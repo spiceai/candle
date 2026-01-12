@@ -176,22 +176,6 @@ pub(crate) fn from_storage<S: Into<Shape>>(
     Tensor(Arc::new(tensor_))
 }
 
-/// Creates a fresh tensor structure based on a storage and a shape, this uses contiguous strides. This has a BackpropOp:none().
-pub fn from_storage_no_op<S: Into<Shape>>(storage: Storage, shape: S, is_variable: bool) -> Tensor {
-    let dtype = storage.dtype();
-    let device = storage.device();
-    let tensor_ = Tensor_ {
-        id: TensorId::new(),
-        storage: Arc::new(RwLock::new(storage)),
-        layout: Layout::contiguous(shape),
-        op: BackpropOp::none(),
-        is_variable,
-        dtype,
-        device,
-    };
-    Tensor(Arc::new(tensor_))
-}
-
 impl Tensor {
     pub(crate) fn ones_impl<S: Into<Shape>>(
         shape: S,
@@ -284,51 +268,6 @@ impl Tensor {
     /// ```
     pub fn zeros_like(&self) -> Result<Self> {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
-    }
-
-    // Do not expose outside of the crate, the `is_variable=true` case should only be accessed from
-    // the variable module.
-    pub(crate) unsafe fn empty_impl<S: Into<Shape>>(
-        shape: S,
-        dtype: DType,
-        device: &Device,
-        is_variable: bool,
-    ) -> Result<Self> {
-        let none = BackpropOp::none();
-        let shape = shape.into();
-        let storage = device.alloc_uninit(&shape, dtype)?;
-        Ok(from_storage(storage, shape, none, is_variable))
-    }
-
-    /// Creates a new tensor filled with uninitialized memory.
-    ///
-    /// # Safety
-    /// This returns uninitialized memory.
-    ///
-    /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = unsafe { Tensor::empty((2, 3), DType::F32, &Device::Cpu)? };
-    /// // a == b
-    /// # Ok::<(), candle_core::Error>(())
-    /// ```
-    pub unsafe fn empty<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
-        Self::empty_impl(shape, dtype, device, false)
-    }
-
-    /// Creates a new tensor filled with uninitialized memory of the same shape, dtype, and device as the other
-    /// tensor.
-    ///
-    /// # Safety
-    /// This returns uninitialized memory.
-    ///
-    /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = unsafe { a.empty_like()? };
-    /// # Ok::<(), candle_core::Error>(())
-    /// ```
-    pub unsafe fn empty_like(&self) -> Result<Self> {
-        Tensor::empty(self.shape(), self.dtype(), self.device())
     }
 
     pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(
@@ -1339,9 +1278,8 @@ impl Tensor {
             .bt())?
         }
 
-        let storage = self.storage().matmul_with_alpha(
+        let storage = self.storage().matmul(
             &rhs.storage(),
-            None,
             (batching, m, n, k),
             self.layout(),
             rhs.layout(),
@@ -1369,172 +1307,6 @@ impl Tensor {
             (false, true) => lhs.matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
             (true, false) => lhs.broadcast_as(&l_shape)?.contiguous()?.matmul(rhs),
             (false, false) => lhs.matmul(rhs),
-        }
-    }
-
-    /// Returns the matrix-multiplication of the input tensor with the other provided tensor. The result is scaled
-    /// and then added to the output tensor, the bias tensor `c`.
-    ///
-    /// If `scale` is None, then the output is as follows:
-    /// `c := c + axb`
-    ///
-    /// Else:
-    /// `c := c + scale * (axb)`
-    ///
-    /// This function is faster than a matmul followed by some scaling multiply because the scaling is fused in the GEMM kernel.
-    /// This is incompatible with gradient tracking. No gradients will be tracked on this operation. However, this also means
-    /// there is an allocation saved as the output is in `c`.
-    ///
-    /// # Arguments
-    ///
-    /// * `self` - A tensor with dimensions `b1, b2, ..., bi, m, k`.
-    /// * `rhs` - A tensor with dimensions `b1, b2, ..., bi, k, n`.
-    /// * `c` - A tensor with dimensions `b1, b2, ..., bi, m, n`, into which the result is accumulated and added to.
-    /// * `scale` - Factor to multiply `self` x `rhs` by
-    pub fn matmul_with_alpha_beta(
-        &self,
-        rhs: &Self,
-        c: &mut Self,
-        scale: Option<f64>,
-    ) -> Result<()> {
-        let a_dims = self.shape().dims();
-        let b_dims = rhs.shape().dims();
-
-        let dim = a_dims.len();
-
-        if dim < 2 || b_dims.len() != dim {
-            Err(Error::ShapeMismatchBinaryOp {
-                lhs: self.shape().clone(),
-                rhs: rhs.shape().clone(),
-                op: "matmul",
-            }
-            .bt())?
-        }
-
-        let m = a_dims[dim - 2];
-        let k = a_dims[dim - 1];
-        let k2 = b_dims[dim - 2];
-        let n = b_dims[dim - 1];
-
-        let exp_c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
-        if exp_c_shape.elem_count() == 0 || k == 0 {
-            bail!("Expected `c` to have more than one element, got 0.");
-        }
-        if exp_c_shape != c.shape().clone() {
-            Err(Error::UnexpectedShape {
-                msg: "`c` has an unexpected shape.".to_string(),
-                expected: exp_c_shape,
-                got: c.shape().clone(),
-            })?
-        }
-
-        let batching: usize = a_dims[..dim - 2].iter().product();
-        let batching_b: usize = b_dims[..dim - 2].iter().product();
-        if k != k2 || batching != batching_b {
-            Err(Error::ShapeMismatchBinaryOp {
-                lhs: self.shape().clone(),
-                rhs: rhs.shape().clone(),
-                op: "matmul_with_alpha_beta",
-            }
-            .bt())?
-        }
-
-        self.storage().matmul_with_alpha_beta(
-            &rhs.storage(),
-            &mut c.storage_mut(),
-            scale,
-            (batching, m, n, k),
-            self.layout(),
-            rhs.layout(),
-            c.layout(),
-        )
-    }
-
-    /// Returns the matrix-multiplication of the input tensor with the other provided tensor. The result is scaled.
-    ///
-    /// This function is faster than a matmul followed by some scaling multiply because the scaling is fused in the GEMM kernel.
-    ///
-    /// The output is as follows:
-    /// `scale * (axb)`
-    ///
-    ///
-    /// This is incompatible with gradient tracking. No gradients will be tracked on this operation.
-    ///
-    /// # Arguments
-    ///
-    /// * `self` - A tensor with dimensions `b1, b2, ..., bi, m, k`.
-    /// * `rhs` - A tensor with dimensions `b1, b2, ..., bi, k, n`.
-    /// * `scale` - Factor to multiply `self` x `rhs` by.
-    pub fn matmul_with_alpha(&self, rhs: &Self, scale: Option<f64>) -> Result<Self> {
-        let a_dims = self.shape().dims();
-        let b_dims = rhs.shape().dims();
-
-        let dim = a_dims.len();
-
-        if dim < 2 || b_dims.len() != dim {
-            Err(Error::ShapeMismatchBinaryOp {
-                lhs: self.shape().clone(),
-                rhs: rhs.shape().clone(),
-                op: "matmul",
-            }
-            .bt())?
-        }
-
-        let m = a_dims[dim - 2];
-        let k = a_dims[dim - 1];
-        let k2 = b_dims[dim - 2];
-        let n = b_dims[dim - 1];
-
-        let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
-        if c_shape.elem_count() == 0 || k == 0 {
-            return Tensor::zeros(c_shape, self.dtype(), self.device());
-        }
-        let batching: usize = a_dims[..dim - 2].iter().product();
-        let batching_b: usize = b_dims[..dim - 2].iter().product();
-        if k != k2 || batching != batching_b {
-            Err(Error::ShapeMismatchBinaryOp {
-                lhs: self.shape().clone(),
-                rhs: rhs.shape().clone(),
-                op: "matmul_with_alpha",
-            }
-            .bt())?
-        }
-
-        let storage = self.storage().matmul_with_alpha(
-            &rhs.storage(),
-            scale,
-            (batching, m, n, k),
-            self.layout(),
-            rhs.layout(),
-        )?;
-        let op = BackpropOp::new2(self, rhs, Op::Matmul);
-        Ok(from_storage(storage, c_shape, op, false))
-    }
-
-    /// Matrix-multiplication with broadcasting support and fused scaling.
-    ///
-    /// Compared to `matmul` the two matrixes are allowed to have different dimensions as long as
-    /// they are compatible for broadcast. E.g. if `self` has shape `(j, 1, n, k)` and `rhs` has
-    /// shape `(l, k, m)`, the output will have shape `(j, l, n, m)`.
-    pub fn broadcast_matmul_with_alpha(&self, rhs: &Self, scale: Option<f64>) -> Result<Self> {
-        let lhs = self;
-        let (l_shape, r_shape) = lhs.shape().broadcast_shape_matmul(rhs.shape())?;
-        let l_broadcast = l_shape != *lhs.shape();
-        let r_broadcast = r_shape != *rhs.shape();
-        // TODO: Avoid concretising the broadcasted matrixes via contiguous.
-        match (l_broadcast, r_broadcast) {
-            (true, true) => lhs
-                .broadcast_as(&l_shape)?
-                .contiguous()?
-                .matmul_with_alpha(&rhs.broadcast_as(&r_shape)?.contiguous()?, scale),
-            (false, true) => {
-                lhs.matmul_with_alpha(&rhs.broadcast_as(&r_shape)?.contiguous()?, scale)
-            }
-            (true, false) => lhs
-                .broadcast_as(&l_shape)?
-                .contiguous()?
-                .matmul_with_alpha(rhs, scale),
-            (false, false) => lhs.matmul_with_alpha(rhs, scale),
         }
     }
 
@@ -2801,6 +2573,62 @@ impl Tensor {
         }
     }
 
+    /// Returns a copy of `self` where the values within `ranges` have been replaced with the
+    /// content of `src`.
+    pub fn slice_assign<D: std::ops::RangeBounds<usize>>(
+        &self,
+        ranges: &[D],
+        src: &Tensor,
+    ) -> Result<Self> {
+        let src_dims = src.dims();
+        let self_dims = self.dims();
+        if self_dims.len() != src_dims.len() {
+            bail!(
+                "slice-assign requires input with the same rank {} <> {}",
+                self_dims.len(),
+                src_dims.len()
+            )
+        }
+        if self_dims.len() != ranges.len() {
+            bail!(
+                "slice-assign requires input with the same rank as there are ranges {} <> {}",
+                self_dims.len(),
+                ranges.len()
+            )
+        }
+        let mut src = src.clone();
+        let mut mask = Self::ones(src.shape(), DType::U8, src.device())?;
+        for (i, range) in ranges.iter().enumerate() {
+            let start_included = match range.start_bound() {
+                std::ops::Bound::Unbounded => 0,
+                std::ops::Bound::Included(v) => *v,
+                std::ops::Bound::Excluded(v) => *v + 1,
+            };
+            let end_excluded = match range.end_bound() {
+                std::ops::Bound::Unbounded => self_dims[i],
+                std::ops::Bound::Included(v) => *v + 1,
+                std::ops::Bound::Excluded(v) => *v,
+            };
+            if end_excluded <= start_included {
+                bail!("slice-assign: empty range for dim {i}, {start_included} {end_excluded}")
+            }
+            if self_dims[i] < end_excluded {
+                bail!(
+                    "slice-assign: upper bound is out of range for dim {i}, {end_excluded} {}",
+                    self_dims[i]
+                )
+            }
+            if end_excluded - start_included != src_dims[i] {
+                bail!(
+                    "slice-assign: the range for dim {i} ({start_included}..{end_excluded}) does not match the size of src {}", src_dims[i]
+                )
+            }
+            src = src.pad_with_zeros(i, start_included, self_dims[i] - end_excluded)?;
+            mask = mask.pad_with_zeros(i, start_included, self_dims[i] - end_excluded)?
+        }
+        mask.where_cond(/* on_true= */ &src, /* on_false= */ self)
+    }
+
     /// Returns log(sum(exp(tensor), dim)).
     pub fn log_sum_exp<D: Dims>(&self, sum_dims: D) -> Result<Self> {
         let sum_dims = sum_dims.to_indexes(self.shape(), "log-sum-exp")?;
@@ -2828,7 +2656,6 @@ impl Tensor {
         rhs.broadcast_mul(&self.log()?)?.exp()
     }
 
-<<<<<<< HEAD
     /// Returns a new tensor with the order of elements reversed along the specified dimensions.
     /// This function makes a copy of the tensor’s data.
     ///
@@ -2849,49 +2676,6 @@ impl Tensor {
             result = result.index_select(&indices_tensor, dim)?;
         }
         Ok(result)
-    }
-
-    /// Returns a view of which contains all slices of size `size` from self tensor in the dimension
-    /// `dim` and stepped by `step`.
-    pub fn unfold<D: Dim>(&self, dim: D, size: usize, step: usize) -> Result<Self> {
-        // https://github.com/pytorch/pytorch/blob/75b0720a97ac5d82e8a7a1a6ae7c5f7a87d7183d/aten/src/ATen/native/TensorShape.cpp#L3785-L3804
-        let mut sizes = self.dims().to_vec();
-        let mut strides = self.stride().to_vec();
-
-        let dim = dim.to_index(self.shape(), "unfold")?;
-
-        let max_len = if self.dims().is_empty() {
-            1
-        } else {
-            sizes[dim]
-        };
-        if size > max_len {
-            bail!(
-                "unsqueeze: maximum size for tensor at dimension {dim} is {max_len} but size is {size}"
-            )
-        }
-        sizes.push(size);
-        strides.push(if self.dims().is_empty() {
-            1
-        } else {
-            strides[dim]
-        });
-
-        if !self.dims().is_empty() {
-            sizes[dim] = ((sizes[dim] as f32 - size as f32) / step as f32 + 1.) as usize;
-            strides[dim] *= step;
-        }
-
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: self.storage.clone(),
-            layout: Layout::new(sizes.into(), strides, self.layout.start_offset()),
-            op: BackpropOp::new1(self, Op::Reshape),
-            is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
     }
 }
 

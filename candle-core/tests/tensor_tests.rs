@@ -18,14 +18,6 @@ fn ones(device: &Device) -> Result<()> {
         [[1, 1, 1], [1, 1, 1]],
     );
     assert_eq!(
-        Tensor::ones((2, 3), DType::I16, device)?.to_vec2::<i16>()?,
-        [[1, 1, 1], [1, 1, 1]],
-    );
-    assert_eq!(
-        Tensor::ones((2, 3), DType::I32, device)?.to_vec2::<i32>()?,
-        [[1, 1, 1], [1, 1, 1]],
-    );
-    assert_eq!(
         Tensor::ones((2, 3), DType::I64, device)?.to_vec2::<i64>()?,
         [[1, 1, 1], [1, 1, 1]],
     );
@@ -905,7 +897,7 @@ fn index_select(device: &Device) -> Result<()> {
             [9.0, 10.0, 11.0]
         ]
     );
-    for dtype in [DType::U8, DType::U32, DType::I16, DType::I32, DType::I64] {
+    for dtype in [DType::U8, DType::U32, DType::I64] {
         let ids = ids.to_dtype(dtype)?;
         let hs = t.index_select(&ids, 1)?;
         assert_eq!(
@@ -1839,18 +1831,6 @@ fn tensor_new() -> Result<()> {
             [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
             [[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]]
         ]
-    );
-    Ok(())
-}
-
-#[test]
-fn unfold() -> Result<()> {
-    let x = Tensor::arange(0i64, 3 * 2, &Device::Cpu)?.reshape((3, 2))?;
-    let unfolded = x.unfold(0, 2, 1)?;
-    dbg!(&unfolded);
-    assert_eq!(
-        unfolded.to_vec3::<i64>()?,
-        vec![[[0i64, 2], [1, 3]], [[2, 4], [3, 5]]]
     );
     Ok(())
 }

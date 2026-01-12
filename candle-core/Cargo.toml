@@ -18,7 +18,6 @@ metal = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true }
-float8 = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 memmap2 = { workspace = true }
@@ -29,8 +28,13 @@ rand_distr = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 thiserror = { workspace = true }
+ug-cuda = { workspace = true, optional = true }
+ug-metal = { workspace = true, optional = true }
 yoke = { workspace = true }
 zip = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ug = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -39,12 +43,11 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "float8/cuda"]
+cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
-nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
-metal = ["dep:metal", "dep:candle-metal-kernels"]
+metal = ["dep:metal", "dep:candle-metal-kernels", "dep:ug-metal"]
 
 [[bench]]
 name = "bench_main"

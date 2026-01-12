@@ -554,11 +554,7 @@ impl DepthAnythingV2 {
     }
 }
 
-<<<<<<< HEAD
 impl Module for DepthAnythingV2 {
-=======
-impl Module for DepthAnythingV2<'_> {
->>>>>>> spiceai
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let features = self.pretrained.get_intermediate_layers(
             xs,
