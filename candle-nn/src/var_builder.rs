@@ -202,7 +202,7 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
         name: &str,
         hints: B::Hints,
     ) -> Result<Tensor> {
-        self.get_with_hints_dtype(s, name, hints, self.data.dtype)
+        self.get_with_hints_dtype(s, name, hints, self.dtype)
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
@@ -212,7 +212,7 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
 
     /// Retrieve the tensor associated with the given name at the current path.
     pub fn get_unchecked(&self, name: &str) -> Result<Tensor> {
-        self.get_unchecked_dtype(name, self.data.dtype)
+        self.get_unchecked_dtype(name, self.dtype)
     }
 
     /// Retrieve the tensor associated with the given name & dtype at the current path.
