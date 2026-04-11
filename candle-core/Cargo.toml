@@ -47,6 +47,7 @@ cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
+nccl = ["cuda", "cudarc/nccl"]
 metal = ["dep:metal", "dep:candle-metal-kernels", "dep:ug-metal"]
 
 [[bench]]
