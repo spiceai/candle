@@ -791,10 +791,9 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs), Self::Metal(c)) => {
                 lhs.matmul_with_alpha_beta(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
             }
-            (lhs, rhs, c) => Err(Error::DeviceMismatchBinaryOp3 {
+            (lhs, rhs, _c) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
-                c: c.device().location(),
                 op: "matmul_with_alpha_beta",
             }
             .bt()),

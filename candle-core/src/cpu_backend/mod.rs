@@ -2745,7 +2745,7 @@ impl BackendStorage for CpuStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
@@ -2756,7 +2756,7 @@ impl BackendStorage for CpuStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, params.c_out)).transpose(1, 2)?;
         let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
@@ -2797,8 +2797,9 @@ impl BackendStorage for CpuStorage {
                     vec![0, k_size * c_out, 1],
                     kernel_l.start_offset(),
                 );
-                self.matmul(
+                self.matmul_with_alpha(
                     kernel,
+                    None,
                     (
                         b_size,
                         /* m */ l_in,
@@ -2942,14 +2943,39 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn matmul(
+    fn matmul_with_alpha_beta(
         &self,
         rhs: &Self,
+        c: &mut Self,
+        s: Option<f64>,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        c_layout: &Layout,
+    ) -> Result<()> {
+        let mm = self.matmul_with_alpha(rhs, s, bmnk, lhs_l, rhs_l)?;
+        let mm_l = Layout::contiguous(c_layout.shape());
+        *c = c.binary_impl::<crate::op::Add>(&mm, c_layout, &mm_l)?;
+        Ok(())
+    }
+
+    fn matmul_with_alpha(
+        &self,
+        rhs: &Self,
+        s: Option<f64>,
         bmnk: (usize, usize, usize, usize),
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
+        let mm = MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)?;
+        match s {
+            None => Ok(mm),
+            Some(alpha) => {
+                let (b, m, n, _) = bmnk;
+                let mm_l = Layout::contiguous((b, m, n));
+                mm.affine(&mm_l, alpha, 0.0)
+            }
+        }
     }
 
     fn device(&self) -> &Self::Device {

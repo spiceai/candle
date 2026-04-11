@@ -8,7 +8,7 @@
 use crate::models::with_tracing::{linear_no_bias, Linear, RmsNorm};
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{scaled_dot_product_attention, Activation, VarBuilder};
+use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
 fn default_num_attention_heads() -> usize {
@@ -267,14 +267,14 @@ impl Attention {
         let value_states = crate::utils::repeat_kv(value_states, self.num_kv_groups)?;
 
         let scale = 1. / (self.head_dim as f64).sqrt();
-        let attn_output = scaled_dot_product_attention(
+        let attn_output = candle_nn::ops::sdpa(
             &query_states,
             &key_states,
             &value_states,
-            scale,
             attention_mask,
             self.use_flash_attn,
-            q_len,
+            scale as f32,
+            1.0,
         )?;
 
         attn_output
