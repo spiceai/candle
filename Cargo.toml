@@ -18,6 +18,7 @@ exclude = [
     "candle-kernels",
     "candle-metal-kernels",
     "candle-onnx",
+    "candle-flash-mla",
 ]
 resolver = "2"
 
@@ -39,6 +40,7 @@ candle = { path = "./candle-core", package = "candle-core", version = "0.10.1" }
 candle-datasets = { path = "./candle-datasets", version = "0.10.1" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.10.1" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.10.1" }
+candle-flash-mla = { path = "./candle-flash-mla", version = "0.10.1" }
 candle-kernels = { path = "./candle-kernels", version = "0.10.1" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.10.1" }
 candle-nn = { path = "./candle-nn", version = "0.10.1" }

@@ -344,8 +344,8 @@ impl SimpleBackend for VarMap {
         VarMap::get(self, s, name, h, dtype, dev)
     }
 
-    fn get_unchecked(&self, _name: &str, _dtype: DType, _dev: &Device) -> Result<Tensor> {
-        candle::bail!("`get_unchecked` does not make sense for `VarMap`, use `get`.");
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        VarMap::get_unchecked(self, name, dtype, dev)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {

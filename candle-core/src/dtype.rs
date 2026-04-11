@@ -1,6 +1,7 @@
 //! Types for elements that can be stored and manipulated using tensors.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::BackendStorage;
+use crate::cpu::kernels::VecOps;
 use crate::{CpuStorage, CpuStorageRef, Error, Result};
 
 /// The different types of elements allowed in tensors.
@@ -96,6 +97,7 @@ impl DType {
     pub fn size_in_bytes(&self) -> usize {
         match self {
             Self::U8 => 1,
+            Self::F8E4M3 => 1,
             Self::U32 => 4,
             Self::I16 => 2,
             Self::I32 => 4,
@@ -235,10 +237,29 @@ with_dtype!(bf16, BF16, bf16::from_f64, bf16::to_f64);
 with_dtype!(f32, F32, |v: f64| v as f32, |v: f32| v as f64);
 with_dtype!(f64, F64, |v: f64| v, |v: f64| v);
 with_dtype!(f8e4m3, F8E4M3, f8e4m3::from_f64, |v: f8e4m3| v.to_f64());
+with_dtype!(f8e4m3, F8E4M3, f8e4m3::from_f64, |v: f8e4m3| v.to_f64());
 
 pub trait IntDType: WithDType + num_traits::Bounded {
     fn is_true(&self) -> bool;
     fn as_usize(&self) -> usize;
+}
+
+impl IntDType for i16 {
+    fn is_true(&self) -> bool {
+        *self != 0
+    }
+    fn as_usize(&self) -> usize {
+        *self as usize
+    }
+}
+
+impl IntDType for i32 {
+    fn is_true(&self) -> bool {
+        *self != 0
+    }
+    fn as_usize(&self) -> usize {
+        *self as usize
+    }
 }
 
 impl IntDType for i64 {
@@ -260,24 +281,6 @@ impl IntDType for u32 {
 }
 
 impl IntDType for u8 {
-    fn is_true(&self) -> bool {
-        *self != 0
-    }
-    fn as_usize(&self) -> usize {
-        *self as usize
-    }
-}
-
-impl IntDType for i16 {
-    fn is_true(&self) -> bool {
-        *self != 0
-    }
-    fn as_usize(&self) -> usize {
-        *self as usize
-    }
-}
-
-impl IntDType for i32 {
     fn is_true(&self) -> bool {
         *self != 0
     }

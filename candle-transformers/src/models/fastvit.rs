@@ -11,13 +11,13 @@ use candle_nn::{
     BatchNorm, Conv2d, Conv2dConfig, Func, VarBuilder,
 };
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Config {
-    pub exp_ratio: usize,
-    pub in_channels: usize,
-    pub blocks: [usize; 4],
-    pub attn: bool,
-    pub lkc_use_act: bool,
+    exp_ratio: usize,
+    in_channels: usize,
+    blocks: [usize; 4],
+    attn: bool,
+    lkc_use_act: bool,
 }
 
 impl Config {
@@ -495,6 +495,7 @@ fn fastvit_model(cfg: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Resul
             .apply(&stage3)?
             .apply(&stage4)?
             .apply(&final_conv)?;
+
         match &cls {
             None => Ok(xs),
             Some(cls) => xs.mean(D::Minus2)?.mean(D::Minus1)?.apply(cls),

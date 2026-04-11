@@ -67,6 +67,8 @@ pub struct MetalDevice {
     pub(crate) seed: Arc<Mutex<Buffer>>,
     /// Last seed value set on this device.
     pub(crate) seed_value: Arc<RwLock<u64>>,
+
+    pub(crate) use_mlx_mm: bool,
 }
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.

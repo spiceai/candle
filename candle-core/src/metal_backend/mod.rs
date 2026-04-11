@@ -1947,6 +1947,7 @@ impl BackendDevice for MetalDevice {
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
+            use_mlx_mm: false,
         })
     }
 

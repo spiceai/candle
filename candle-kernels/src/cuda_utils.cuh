@@ -115,6 +115,35 @@ __device__ void chunk_sum(
     }
 }
 
+__device__ __forceinline__ int GetBlockNum(void) {
+  return (gridDim.x * gridDim.y * gridDim.z);
+}
+
+__device__ __forceinline__ int GetBlockIdx(void) {
+  return (blockIdx.z * (gridDim.x * gridDim.y) + blockIdx.y * gridDim.x +
+          blockIdx.x);
+}
+
+__device__ __forceinline__ int GetThreadNumEachBlock(void) {
+  return (blockDim.x * blockDim.y * blockDim.z);
+}
+
+__device__ __forceinline__ int GetThreadNum(void) {
+  return GetBlockNum() * GetThreadNumEachBlock();
+}
+
+__device__ __forceinline__ int GetThreadIdxInBlock(void) {
+  return threadIdx.z * (blockDim.x * blockDim.y) +
+      threadIdx.y * blockDim.x + threadIdx.x;
+}
+
+__device__ __forceinline__ int GetThreadIdx(void) {
+  int blockIdx = GetBlockIdx();
+  int threadNumEachBlock = GetThreadNumEachBlock();
+
+  return blockIdx * threadNumEachBlock + GetThreadIdxInBlock();
+}
+
 __device__ __forceinline__ bool isnang(float a) { return isnan(a); }
 __device__ __forceinline__ bool isnang(double a) { return isnan(a); }
 __device__ __forceinline__ float recipg(float a) { return 1.0 / a; }
@@ -152,6 +181,10 @@ __device__ __forceinline__ double absg(double a) { return fabs(a); }
 __device__ __forceinline__ float copysigng(float a, float b) { return copysignf(a, b); }
 __device__ __forceinline__ double copysigng(double a, double b) { return copysign(a, b); }
 
+__device__ __forceinline__ int16_t ming(int16_t a, int16_t b) { return min(a, b); }
+__device__ __forceinline__ int16_t maxg(int16_t a, int16_t b) { return max(a, b); }
+__device__ __forceinline__ int32_t ming(int32_t a, int32_t b) { return min(a, b); }
+__device__ __forceinline__ int32_t maxg(int32_t a, int32_t b) { return max(a, b); }
 __device__ __forceinline__ int64_t ming(int64_t a, int64_t b) { return min(a, b); }
 __device__ __forceinline__ int64_t maxg(int64_t a, int64_t b) { return max(a, b); }
 __device__ __forceinline__ uint32_t ming(uint32_t a, uint32_t b) { return min(a, b); }
@@ -180,6 +213,9 @@ __device__ __forceinline__ __half copysigng(__half a, __half b) { return __float
 #endif
 
 #if __CUDA_ARCH__ >= 800
+#include "cuda_fp8.h"
+#include "cuda_bf16.h"
+
 __device__ __forceinline__ __nv_bfloat16 powg(__nv_bfloat16 a, __nv_bfloat16 b) { return __float2bfloat16(powf(__bfloat162float(a), __bfloat162float(b))); }
 __device__ __forceinline__ bool isnang(__nv_bfloat16 a) { return __hisnan(a); }
 __device__ __forceinline__ __nv_bfloat16 sqrtg(__nv_bfloat16 a) { return hsqrt(a); }

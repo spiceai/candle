@@ -38,10 +38,9 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
         _imatrix_weights: &[f32],
         _n_per_row: usize,
     ) {
-        panic!(
-            "`from_float_imatrix` is unimplemented for {:?}",
-            Self::DTYPE
-        );
+        let _ = (|| -> Result<()> {
+            crate::bail!("`from_float_imatrix` is unimplemented for {:?}", Self::DTYPE);
+        })();
     }
 
     fn direct_copy(_xs: &[f32], _ys: &mut [Self]) {}
