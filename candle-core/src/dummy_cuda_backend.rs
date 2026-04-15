@@ -1,3 +1,5 @@
+//! Implementation of the Cuda backend when Cuda support has not been compiled in.
+//!
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
@@ -8,15 +10,26 @@ pub struct CudaDevice;
 #[derive(Debug)]
 pub struct CudaStorage;
 
+impl CudaStorage {
+    pub fn transfer_to_device(&self, _dst: &CudaDevice) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+}
+
 macro_rules! fail {
     () => {
         unimplemented!("cuda support has not been enabled, add `cuda` feature to enable.")
     };
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DeviceId(usize);
 
 impl CudaDevice {
     pub fn new_with_stream(_: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
+    }
+    pub fn id(&self) -> DeviceId {
+        DeviceId(0)
     }
 }
 
@@ -33,6 +46,10 @@ impl crate::backend::BackendStorage for CudaStorage {
 
     fn device(&self) -> &Self::Device {
         fail!()
+    }
+
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
@@ -122,15 +139,27 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn scatter_add(
-        &self,
+    fn scatter_set(
+        &mut self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -202,6 +231,18 @@ impl crate::backend::BackendStorage for CudaStorage {
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 impl crate::backend::BackendDevice for CudaDevice {
@@ -227,10 +268,6 @@ impl crate::backend::BackendDevice for CudaDevice {
     }
 
     fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
-        Err(Error::NotCompiledWithCudaSupport)
-    }
-
-    fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

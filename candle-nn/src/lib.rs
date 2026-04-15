@@ -12,13 +12,13 @@
 //! - [candle-examples](https://docs.rs/candle-examples/). Examples of Candle in Use.
 //! - [candle-onnx](https://docs.rs/candle-onnx/). Loading and using ONNX models.
 //! - [candle-pyo3](https://docs.rs/candle-pyo3/). Access to Candle from Python.
-//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implemntation of many published transformer models.
+//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implementation of many published transformer models.
 //!
 
 pub mod activation;
-pub mod attention;
 pub mod batch_norm;
 pub mod conv;
+pub mod cpu_flash_attention;
 pub mod embedding;
 pub mod encoding;
 pub mod func;
@@ -28,17 +28,17 @@ pub mod kv_cache;
 pub mod layer_norm;
 pub mod linear;
 pub mod loss;
+pub mod moe;
 pub mod ops;
 pub mod optim;
 pub mod rnn;
-pub mod rope;
 pub mod rotary_emb;
+pub mod sampling;
 pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
 
 pub use activation::{prelu, Activation, PReLU};
-pub use attention::scaled_dot_product_attention;
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};
 pub use conv::{
     conv1d, conv1d_no_bias, conv2d, conv2d_no_bias, conv_transpose1d, conv_transpose1d_no_bias,
@@ -50,13 +50,12 @@ pub use func::{func, func_t, Func, FuncT};
 pub use group_norm::{group_norm, GroupNorm};
 pub use init::Init;
 pub use layer_norm::{
-    layer_norm, rms_norm_non_quant, rms_norm_quant, LayerNorm, LayerNormConfig, RmsNorm,
+    layer_norm, layer_norm_no_bias, rms_norm, LayerNorm, LayerNormConfig, RmsNorm,
 };
 pub use linear::{linear, linear_b, linear_no_bias, Linear};
-pub use ops::{kvconcat, Dropout};
+pub use ops::Dropout;
 pub use optim::{AdamW, Optimizer, ParamsAdamW, SGD};
 pub use rnn::{gru, lstm, GRUConfig, LSTMConfig, GRU, LSTM, RNN};
-pub use rope::RotaryEmbedding;
 pub use sequential::{seq, Sequential};
 pub use var_builder::VarBuilder;
 pub use var_map::VarMap;

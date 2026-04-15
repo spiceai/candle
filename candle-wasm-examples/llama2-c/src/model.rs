@@ -1,5 +1,5 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::layer_norm::RmsNormNonQuantized;
+
 use candle_nn::{
     embedding, linear_no_bias as linear, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };
@@ -202,19 +202,14 @@ impl Mlp {
 }
 
 struct Block {
-    rms_1: RmsNorm<RmsNormNonQuantized>,
+    rms_1: RmsNorm,
     attn: CausalSelfAttention,
-    rms_2: RmsNorm<RmsNormNonQuantized>,
+    rms_2: RmsNorm,
     mlp: Mlp,
 }
 
 impl Block {
-    fn new(
-        rms_1: RmsNorm<RmsNormNonQuantized>,
-        attn: CausalSelfAttention,
-        rms_2: RmsNorm<RmsNormNonQuantized>,
-        mlp: Mlp,
-    ) -> Self {
+    fn new(rms_1: RmsNorm, attn: CausalSelfAttention, rms_2: RmsNorm, mlp: Mlp) -> Self {
         Self {
             rms_1,
             attn,
@@ -235,13 +230,9 @@ impl Block {
     fn load(vb: VarBuilder, cache: &Cache, cfg: &Config) -> Result<Self> {
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cache, cfg)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
-        let input_layernorm =
-            candle_nn::rms_norm_non_quant(cfg.dim, cfg.norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = candle_nn::rms_norm_non_quant(
-            cfg.dim,
-            cfg.norm_eps,
-            vb.pp("post_attention_layernorm"),
-        )?;
+        let input_layernorm = candle_nn::rms_norm(cfg.dim, cfg.norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm =
+            candle_nn::rms_norm(cfg.dim, cfg.norm_eps, vb.pp("post_attention_layernorm"))?;
         Ok(Self::new(
             input_layernorm,
             attn,
@@ -254,17 +245,12 @@ impl Block {
 pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
-    ln_f: RmsNorm<RmsNormNonQuantized>,
+    ln_f: RmsNorm,
     lm_head: Linear,
 }
 
 impl Llama {
-    fn new(
-        wte: Embedding,
-        blocks: Vec<Block>,
-        ln_f: RmsNorm<RmsNormNonQuantized>,
-        lm_head: Linear,
-    ) -> Self {
+    fn new(wte: Embedding, blocks: Vec<Block>, ln_f: RmsNorm, lm_head: Linear) -> Self {
         Self {
             wte,
             blocks,
@@ -288,7 +274,7 @@ impl Llama {
     pub fn load(vb: VarBuilder, cache: &Cache, cfg: &Config) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.dim, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
-        let norm = candle_nn::rms_norm_non_quant(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
+        let norm = candle_nn::rms_norm(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.n_layers)
             .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cache, cfg).unwrap())
             .collect();

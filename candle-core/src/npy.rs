@@ -27,13 +27,11 @@
 //! ```
 use crate::{DType, Device, Error, Result, Shape, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
-use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
-use std::slice;
 
 const NPY_MAGIC_STRING: &[u8] = b"\x93NUMPY";
 const NPY_SUFFIX: &str = ".npy";
@@ -93,6 +91,10 @@ impl Header {
             DType::U32 => "u4",
             DType::U8 => "u1",
             DType::F8E4M3 => Err(Error::Npy("f8e4m3 is not supported".into()))?,
+            DType::F6E2M3 => Err(Error::Npy("f6e2m3 is not supported".into()))?,
+            DType::F6E3M2 => Err(Error::Npy("f6e3m2 is not supported".into()))?,
+            DType::F4 => Err(Error::Npy("f4 is not supported".into()))?,
+            DType::F8E8M0 => Err(Error::Npy("f8e8m0 is not supported".into()))?,
         };
         if !shape.is_empty() {
             shape.push(',')
@@ -111,7 +113,7 @@ impl Header {
         let mut parts: Vec<String> = vec![];
         let mut start_index = 0usize;
         let mut cnt_parenthesis = 0i64;
-        for (index, c) in header.chars().enumerate() {
+        for (index, c) in header.char_indices() {
             match c {
                 '(' => cnt_parenthesis += 1,
                 ')' => cnt_parenthesis -= 1,
@@ -165,9 +167,9 @@ impl Header {
                     "e" | "f2" => DType::F16,
                     "f" | "f4" => DType::F32,
                     "d" | "f8" => DType::F64,
-                    // "i" | "i4" => DType::S32,
+                    "i" | "i4" => DType::I32,
                     "q" | "i8" => DType::I64,
-                    // "h" | "i2" => DType::S16,
+                    "h" | "i2" => DType::I16,
                     // "b" | "i1" => DType::S8,
                     "B" | "u1" => DType::U8,
                     "I" | "u4" => DType::U32,
@@ -255,11 +257,14 @@ impl Tensor {
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::F8E4M3 => {
-                let mut data_t = vec![F8E4M3::ZERO; elem_count];
-                let ptr = data_t.as_mut_ptr().cast::<i8>();
-                let len = data_t.len();
-                reader.read_i8_into(unsafe { slice::from_raw_parts_mut(ptr, len) })?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                let mut data_t = vec![0u8; elem_count];
+                reader.read_exact(&mut data_t)?;
+                let data_f8: Vec<float8::F8E4M3> =
+                    data_t.into_iter().map(float8::F8E4M3::from_bits).collect();
+                Tensor::from_vec(data_f8, shape, &Device::Cpu)
+            }
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                Err(Error::UnsupportedDTypeForOp(dtype, "from_reader").bt())
             }
         }
     }

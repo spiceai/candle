@@ -15,6 +15,7 @@ use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_transformers::models::quantized_llama::ModelWeights as Phi3b;
 use candle_transformers::models::quantized_phi::ModelWeights as Phi2;
+use candle_transformers::models::quantized_phi3::ModelWeights as Phi3;
 
 const DEFAULT_PROMPT: &str = "Write a function to count prime numbers up to N. ";
 
@@ -22,9 +23,13 @@ const DEFAULT_PROMPT: &str = "Write a function to count prime numbers up to N. "
 enum Which {
     #[value(name = "phi-2")]
     Phi2,
+    #[value(name = "phi-3")]
+    Phi3,
     /// Alternative implementation of phi-3, based on llama.
     #[value(name = "phi-3b")]
     Phi3b,
+    #[value(name = "phi-4")]
+    Phi4,
 }
 
 #[derive(Parser, Debug)]
@@ -100,7 +105,8 @@ impl Args {
                 let api = hf_hub::api::sync::Api::new()?;
                 let repo = match self.which {
                     Which::Phi2 => "microsoft/phi-2",
-                    Which::Phi3b => "microsoft/Phi-3-mini-4k-instruct",
+                    Which::Phi3 | Which::Phi3b => "microsoft/Phi-3-mini-4k-instruct",
+                    Which::Phi4 => "microsoft/phi-4",
                 };
                 let api = api.model(repo.to_string());
                 api.get("tokenizer.json")?
@@ -115,11 +121,17 @@ impl Args {
             None => {
                 let (repo, filename, revision) = match self.which {
                     Which::Phi2 => ("TheBloke/phi-2-GGUF", "phi-2.Q4_K_M.gguf", "main"),
+                    Which::Phi3 => (
+                        "microsoft/Phi-3-mini-4k-instruct-gguf",
+                        "Phi-3-mini-4k-instruct-q4.gguf",
+                        "main",
+                    ),
                     Which::Phi3b => (
                         "microsoft/Phi-3-mini-4k-instruct-gguf",
                         "Phi-3-mini-4k-instruct-q4.gguf",
                         "5eef2ce24766d31909c0b269fe90c817a8f263fb",
                     ),
+                    Which::Phi4 => ("microsoft/phi-4-gguf", "phi-4-q4.gguf", "main"),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
                 api.repo(hf_hub::Repo::with_revision(
@@ -136,7 +148,7 @@ impl Args {
 
 fn format_size(size_in_bytes: usize) -> String {
     if size_in_bytes < 1_000 {
-        format!("{}B", size_in_bytes)
+        format!("{size_in_bytes}B")
     } else if size_in_bytes < 1_000_000 {
         format!("{:.2}KB", size_in_bytes as f64 / 1e3)
     } else if size_in_bytes < 1_000_000_000 {
@@ -148,6 +160,7 @@ fn format_size(size_in_bytes: usize) -> String {
 
 enum Model {
     Phi2(Phi2),
+    Phi3(Phi3),
     Phi3b(Phi3b),
 }
 
@@ -155,6 +168,7 @@ impl Model {
     fn forward(&mut self, xs: &Tensor, pos: usize) -> candle::Result<Tensor> {
         match self {
             Self::Phi2(m) => m.forward(xs, pos),
+            Self::Phi3(m) => m.forward(xs, pos),
             Self::Phi3b(m) => m.forward(xs, pos),
         }
     }
@@ -206,6 +220,12 @@ fn main() -> anyhow::Result<()> {
         );
         match args.which {
             Which::Phi2 => Model::Phi2(Phi2::from_gguf(model, &mut file, &device)?),
+            Which::Phi3 | Which::Phi4 => Model::Phi3(Phi3::from_gguf(
+                args.use_flash_attn,
+                model,
+                &mut file,
+                &device,
+            )?),
             Which::Phi3b => Model::Phi3b(Phi3b::from_gguf(model, &mut file, &device)?),
         }
     };

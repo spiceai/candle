@@ -2,7 +2,6 @@ use super::model::{attention, timestep_embedding, Config, EmbedNd};
 use crate::quantized_nn::{linear, linear_b, Linear};
 use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::layer_norm::RmsNormNonQuantized;
 use candle_nn::{LayerNorm, RmsNorm};
 
 fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
@@ -35,16 +34,16 @@ impl candle::Module for MlpEmbedder {
 
 #[derive(Debug, Clone)]
 pub struct QkNorm {
-    query_norm: RmsNorm<RmsNormNonQuantized>,
-    key_norm: RmsNorm<RmsNormNonQuantized>,
+    query_norm: RmsNorm,
+    key_norm: RmsNorm,
 }
 
 impl QkNorm {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
         let query_norm = vb.get(dim, "query_norm.scale")?.dequantize(vb.device())?;
-        let query_norm = RmsNorm::<RmsNormNonQuantized>::new(query_norm, 1e-6);
+        let query_norm = RmsNorm::new(query_norm, 1e-6);
         let key_norm = vb.get(dim, "key_norm.scale")?.dequantize(vb.device())?;
-        let key_norm = RmsNorm::<RmsNormNonQuantized>::new(key_norm, 1e-6);
+        let key_norm = RmsNorm::new(key_norm, 1e-6);
         Ok(Self {
             query_norm,
             key_norm,

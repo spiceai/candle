@@ -1,3 +1,5 @@
+//! A `VarBuilder` for variable retrieval from models
+//!
 //! A `VarBuilder` is used to retrieve variables used by a model. These variables can either come
 //! from a pre-trained checkpoint, e.g. using `VarBuilder::from_mmaped_safetensors`, or initialized
 //! for training, e.g. using `VarBuilder::from_varmap`.
@@ -35,8 +37,8 @@ pub type VarBuilder<'a> = VarBuilderArgs<'a, Box<dyn SimpleBackend + 'a>>;
 
 struct TensorData<B: Backend> {
     backend: Arc<B>,
-    pub dtype: DType,
     pub device: Device,
+    pub dtype: DType,
 }
 
 /// A trait that defines how tensor data is retrieved.
@@ -107,8 +109,8 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
     pub fn new_with_args(backend: B, dtype: DType, dev: &Device) -> Self {
         let data = TensorData {
             backend: Arc::new(backend),
-            dtype,
             device: dev.clone(),
+            dtype,
         };
         Self {
             data: Arc::new(data),
@@ -204,7 +206,7 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
         name: &str,
         hints: B::Hints,
     ) -> Result<Tensor> {
-        self.get_with_hints_dtype(s, name, hints, self.data.dtype)
+        self.get_with_hints_dtype(s, name, hints, self.dtype)
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
@@ -292,7 +294,15 @@ impl SimpleBackend for HashMap<String, Tensor> {
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        let tensor = self.get_unchecked(name, dtype, dev)?;
+        let tensor = self
+            .get(name)
+            .ok_or_else(|| {
+                Error::CannotFindTensor {
+                    path: name.to_string(),
+                }
+                .bt()
+            })?
+            .clone();
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
@@ -301,7 +311,7 @@ impl SimpleBackend for HashMap<String, Tensor> {
             }
             .bt())?
         }
-        Ok(tensor)
+        tensor.to_device(dev)?.to_dtype(dtype)
     }
 
     fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
@@ -353,15 +363,24 @@ impl SimpleBackend for SafeTensorWithRouting<'_> {
     fn get(
         &self,
         s: Shape,
-        name: &str,
+        path: &str,
         _: crate::Init,
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        let tensor = self.get_unchecked(name, dtype, dev)?;
+        let index = self.routing.get(path).ok_or_else(|| {
+            Error::CannotFindTensor {
+                path: path.to_string(),
+            }
+            .bt()
+        })?;
+        let tensor = self.safetensors[*index]
+            .tensor(path)?
+            .load(dev)?
+            .to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
-                msg: format!("shape mismatch for {name}"),
+                msg: format!("shape mismatch for {path}"),
                 expected: s,
                 got: tensor.shape().clone(),
             }
@@ -393,15 +412,22 @@ impl SimpleBackend for candle::npy::NpzTensors {
     fn get(
         &self,
         s: Shape,
-        name: &str,
+        path: &str,
         _: crate::Init,
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        let tensor = self.get_unchecked(name, dtype, dev)?;
+        let tensor = match self.get(path)? {
+            None => Err(Error::CannotFindTensor {
+                path: path.to_string(),
+            }
+            .bt())?,
+            Some(tensor) => tensor,
+        };
+        let tensor = tensor.to_device(dev)?.to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
-                msg: format!("shape mismatch for {name}"),
+                msg: format!("shape mismatch for {path}"),
                 expected: s,
                 got: tensor.shape().clone(),
             }
@@ -431,15 +457,22 @@ impl SimpleBackend for candle::pickle::PthTensors {
     fn get(
         &self,
         s: Shape,
-        name: &str,
+        path: &str,
         _: crate::Init,
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        let tensor = self.get_unchecked(name, dtype, dev)?;
+        let tensor = match self.get(path)? {
+            None => Err(Error::CannotFindTensor {
+                path: path.to_string(),
+            }
+            .bt())?,
+            Some(tensor) => tensor,
+        };
+        let tensor = tensor.to_device(dev)?.to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
-                msg: format!("shape mismatch for {name}"),
+                msg: format!("shape mismatch for {path}"),
                 expected: s,
                 got: tensor.shape().clone(),
             }
@@ -474,7 +507,7 @@ impl SimpleBackend for candle::safetensors::MmapedSafetensors {
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        let tensor = self.get_unchecked(name, dtype, dev)?;
+        let tensor = self.load(name, dev)?.to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
@@ -504,7 +537,7 @@ impl SimpleBackend for candle::safetensors::BufferedSafetensors {
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        let tensor = self.get_unchecked(name, dtype, dev)?;
+        let tensor = self.load(name, dev)?.to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
@@ -534,7 +567,7 @@ impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        let tensor = self.get_unchecked(name, dtype, dev)?;
+        let tensor = self.load(name, dev)?.to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
@@ -568,8 +601,8 @@ impl<'a> VarBuilder<'a> {
     ) -> Self {
         let data = TensorData {
             backend: Arc::new(backend),
-            dtype,
             device,
+            dtype,
         };
         Self {
             data: Arc::new(data),
@@ -638,7 +671,17 @@ impl<'a> VarBuilder<'a> {
         let pth = candle::pickle::PthTensors::new(p, None)?;
         Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
     }
-
+    /// Initializes a `VarBuilder` that retrieves tensors stored in a pytorch pth file.
+    /// similar to [`from_pth`] but requires a `state_key`.
+    pub fn from_pth_with_state<P: AsRef<std::path::Path>>(
+        p: P,
+        dtype: DType,
+        state_key: &str,
+        dev: &Device,
+    ) -> Result<Self> {
+        let pth = candle::pickle::PthTensors::new(p, Some(state_key))?;
+        Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
+    }
     /// Gets a VarBuilder that applies some renaming function on tensor it gets queried for before
     /// passing the new names to the inner VarBuilder.
     ///
@@ -676,8 +719,8 @@ impl<'a> VarBuilder<'a> {
         let backend: Box<dyn SimpleBackend + 'a> = Box::new(backend);
         let data = TensorData {
             backend: Arc::new(backend),
-            dtype,
             device,
+            dtype,
         };
         Self {
             data: Arc::new(data),

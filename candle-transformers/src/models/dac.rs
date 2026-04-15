@@ -1,4 +1,9 @@
-/// Adapted from https://github.com/descriptinc/descript-audio-codec
+//! Implementation of the Descript Audio Codec (DAC) model
+//!
+//! See: [Descript Audio Codec](https://github.com/descriptinc/descript-audio-codec)
+//!
+/// An efficient neural codec for compressing/decompressing audio
+///
 use crate::models::encodec;
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
@@ -325,6 +330,7 @@ impl ResidualVectorQuantizer {
         Ok(Self { quantizers })
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_codes(&self, codes: &Tensor) -> Result<Tensor> {
         let mut sum = None;
         for (idx, quantizer) in self.quantizers.iter().enumerate() {
@@ -352,7 +358,6 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vb = vb.pp("model");
         let encoder = Encoder::new(64, &[2, 4, 8, 8], cfg.latent_dim, vb.pp("encoder"))?;
         let quantizer = ResidualVectorQuantizer::new(
             cfg.latent_dim,

@@ -7,8 +7,8 @@
 //!
 //! let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
 //! let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
-//!
 //! let c = a.matmul(&b)?;
+//!
 //! # Ok(())}
 //! ```
 //!
@@ -44,7 +44,7 @@
 //! - [candle-examples](https://docs.rs/candle-examples/). Examples of Candle in Use.
 //! - [candle-onnx](https://docs.rs/candle-onnx/). Loading and using ONNX models.
 //! - [candle-pyo3](https://docs.rs/candle-pyo3/). Access to Candle from Python.
-//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implemntation of many published transformer models.
+//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implementation of many published transformer models.
 //!
 
 #[cfg(feature = "accelerate")]
@@ -62,6 +62,7 @@ mod device;
 pub mod display;
 mod dtype;
 pub mod dummy_cuda_backend;
+pub mod dummy_dtype;
 mod dummy_metal_backend;
 pub mod error;
 mod indexer;
@@ -83,7 +84,6 @@ pub mod streaming;
 mod strided_index;
 mod tensor;
 mod tensor_cat;
-mod tensor_indexing;
 pub mod test_utils;
 pub mod utils;
 mod variable;
@@ -92,9 +92,12 @@ mod variable;
 pub use cuda_backend::cudnn;
 
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
+#[cfg(feature = "ug")]
+pub use custom_op::UgIOp1;
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
+pub use dummy_dtype::{F4, F6E2M3, F6E3M2, F8E8M0};
 pub use error::{Context, Error, Result};
 pub use indexer::{IndexOp, TensorIndexer};
 pub use layout::Layout;
@@ -102,7 +105,7 @@ pub use shape::{Shape, D};
 pub use storage::Storage;
 pub use streaming::{StreamTensor, StreamingBinOp, StreamingModule};
 pub use strided_index::{StridedBlocks, StridedIndex};
-pub use tensor::{from_storage_no_op, Tensor, TensorId};
+pub use tensor::{Tensor, TensorId};
 pub use variable::Var;
 
 #[cfg(feature = "cuda")]
@@ -141,7 +144,7 @@ impl ToUsize2 for (usize, usize) {
     }
 }
 
-// A simple trait defining a module with forward method using a single argument.
+/// Defining a module with forward method using a single argument.
 pub trait Module {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
 }
@@ -161,8 +164,8 @@ impl<M: Module> Module for Option<&M> {
     }
 }
 
-// A trait defining a module with forward method using a single tensor argument and a flag to
-// separate the training and evaluation behaviors.
+/// A single forward method using a single single tensor argument and a flag to
+/// separate the training and evaluation behaviors.
 pub trait ModuleT {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor>;
 }

@@ -1,3 +1,10 @@
+//! Based on the BEIT vision-language model.
+//!
+//! See "BEIT: BERT Pre-Training of Image Transformers", Bao et al. 2021
+//! - [Arxiv](https://arxiv.org/abs/2106.08254)
+//! - [GitHub](https://github.com/microsoft/unilm/tree/master/beit)
+//!
+
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
@@ -79,34 +86,34 @@ impl Attention {
             .contiguous()?;
 
         let relative_coords = relative_coords.slice_assign(
-            &[&(0..w_area), &(0..w_area), &(0..1)],
+            &[0..w_area, 0..w_area, 0..1],
             &(relative_coords.i((0..w_area, 0..w_area, 0..1))? + (WINDOW_SIZE - 1) as f64)?,
         )?;
         let relative_coords = relative_coords.slice_assign(
-            &[&(0..w_area), &(0..w_area), &(1..2)],
+            &[0..w_area, 0..w_area, 1..2],
             &(relative_coords.i((0..w_area, 0..w_area, 1..2))? + (WINDOW_SIZE - 1) as f64)?,
         )?;
         let relative_coords = relative_coords.slice_assign(
-            &[&(0..w_area), &(0..w_area), &(0..1)],
+            &[0..w_area, 0..w_area, 0..1],
             &(relative_coords.i((.., .., 0..1))? * (2. * (WINDOW_SIZE as f64) - 1.))?,
         )?;
 
         Tensor::zeros((w_area + 1, w_area + 1), DType::I64, device)?
-            .slice_assign(&[&(1..), &(1..)], &relative_coords.sum(2)?)?
+            .slice_assign(&[1.., 1..], &relative_coords.sum(2)?)?
             .slice_assign(
-                &[&(0..1), &(0..(w_area + 1))],
+                &[0..1, 0..(w_area + 1)],
                 &(Tensor::ones((1, w_area + 1), DType::I64, device)?
                     * ((num_relative_distance - 3) as f64))?
                     .to_dtype(DType::I64)?,
             )?
             .slice_assign(
-                &[&(0..(w_area + 1)), &(0..1)],
+                &[0..(w_area + 1), 0..1],
                 &(Tensor::ones((w_area + 1, 1), DType::I64, device)?
                     * ((num_relative_distance - 2) as f64))?
                     .to_dtype(DType::I64)?,
             )?
             .slice_assign(
-                &[&(0..1), &(0..1)],
+                &[0..1, 0..1],
                 &(Tensor::ones((1, 1), DType::I64, device)?
                     * ((num_relative_distance - 1) as f64))?
                     .to_dtype(DType::I64)?,

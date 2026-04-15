@@ -1,3 +1,8 @@
+//! Implementation of the ChatGLM2/3 models from THUDM.
+//!
+//! - 💻 [GitHub](https://github.com/THUDM/ChatGLM3) ChatGLM3: Advancing Multilingual Conversational Language Models with High-Quality Data
+//! - 💻 [GitHub](https://github.com/THUDM/ChatGLM2-6B) ChatGLM2-6B.
+//!
 use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
@@ -374,7 +379,7 @@ struct Block {
 impl Block {
     fn new(layer_number: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let input_layernorm = if cfg.rmsnorm {
-            candle_nn::rms_norm_non_quant(
+            candle_nn::rms_norm(
                 cfg.hidden_size,
                 cfg.layernorm_epsilon,
                 vb.pp("input_layernorm"),
@@ -388,7 +393,7 @@ impl Block {
             )?
         };
         let post_attention_layernorm = if cfg.rmsnorm {
-            candle_nn::rms_norm_non_quant(
+            candle_nn::rms_norm(
                 cfg.hidden_size,
                 cfg.layernorm_epsilon,
                 vb.pp("post_attention_layernorm"),
@@ -460,7 +465,7 @@ impl Transformer {
         }
         let final_layernorm = if cfg.post_layer_norm {
             let ln = if cfg.rmsnorm {
-                candle_nn::rms_norm_non_quant(
+                candle_nn::rms_norm(
                     cfg.hidden_size,
                     cfg.layernorm_epsilon,
                     vb.pp("final_layernorm"),
