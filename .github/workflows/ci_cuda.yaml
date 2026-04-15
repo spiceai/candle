@@ -23,6 +23,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: '12.6.3'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart-dev", "cublas-dev", "curand-dev"]'
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y curl build-essential libssl-dev protobuf-compiler pkg-config
       - name: Install Rust Stable
