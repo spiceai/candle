@@ -1,20 +1,16 @@
 use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor, D};
 use float8::F8E4M3;
 
-/// Check whether fp8 (F8E4M3) is supported on the given device.
-/// fp8 requires CUDA compute capability >= 8.0 and is not supported on Metal.
-fn supports_fp8(device: &Device) -> bool {
-    if device.is_metal() {
-        return false;
-    }
+/// Check whether BF16/F8E4M3 CUDA kernels (fill, affine, reduce, etc.) are available.
+/// These kernels require `__CUDA_ARCH__ >= 800` (Ampere+) and are not compiled for older GPUs.
+/// Metal does not support F8E4M3 at all; BF16 fill works on Metal.
+fn supports_sm80_dtypes(device: &Device) -> bool {
     if device.is_cuda() {
-        // CUDA_COMPUTE_CAP is set at build time and reflects the target SM arch.
         if let Ok(cap) = std::env::var("CUDA_COMPUTE_CAP") {
             if let Ok(cap) = cap.parse::<u32>() {
                 return cap >= 80;
             }
         }
-        // If CUDA_COMPUTE_CAP is unset, assume SM >= 80 (optimistic default).
     }
     true
 }
@@ -65,23 +61,25 @@ fn ones(device: &Device) -> Result<()> {
             ]
         ],
     );
-    assert_eq!(
-        Tensor::ones((2, 3), DType::BF16, device)?.to_vec2::<half::bf16>()?,
-        [
+    if supports_sm80_dtypes(device) {
+        assert_eq!(
+            Tensor::ones((2, 3), DType::BF16, device)?.to_vec2::<half::bf16>()?,
             [
-                half::bf16::from_f32(1.0),
-                half::bf16::from_f32(1.0),
-                half::bf16::from_f32(1.0)
+                [
+                    half::bf16::from_f32(1.0),
+                    half::bf16::from_f32(1.0),
+                    half::bf16::from_f32(1.0)
+                ],
+                [
+                    half::bf16::from_f32(1.0),
+                    half::bf16::from_f32(1.0),
+                    half::bf16::from_f32(1.0)
+                ]
             ],
-            [
-                half::bf16::from_f32(1.0),
-                half::bf16::from_f32(1.0),
-                half::bf16::from_f32(1.0)
-            ]
-        ],
-    );
+        );
+    }
 
-    if supports_fp8(device) {
+    if supports_sm80_dtypes(device) && !device.is_metal() {
         assert_eq!(
             Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
             [
@@ -147,7 +145,7 @@ fn arange(device: &Device) -> Result<()> {
         [5, 4, 3, 2, 1],
     );
 
-    if supports_fp8(device) {
+    if supports_sm80_dtypes(device) && !device.is_metal() {
         assert_eq!(
             Tensor::arange_step(
                 F8E4M3::from_f32(0.),
