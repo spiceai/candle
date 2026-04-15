@@ -1672,48 +1672,39 @@ impl BackendStorage for MetalStorage {
         Ok(acc)
     }
 
-    fn matmul(
+    fn matmul_with_alpha_beta(
         &self,
         rhs: &Self,
-        (b, m, n, k): (usize, usize, usize, usize),
+        c: &mut Self,
+        s: Option<f64>,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        c_layout: &Layout,
+    ) -> Result<()> {
+        let mm = self.matmul_with_alpha(rhs, s, bmnk, lhs_l, rhs_l)?;
+        let mm_l = Layout::contiguous(c_layout.shape());
+        *c = c.binary_impl::<crate::op::Add>(&mm, c_layout, &mm_l)?;
+        Ok(())
+    }
+
+    fn matmul_with_alpha(
+        &self,
+        rhs: &Self,
+        s: Option<f64>,
+        bmnk: (usize, usize, usize, usize),
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
-        let encoder = self.device.command_encoder()?;
-        encoder.set_label("matmul");
-        let dtype = match self.dtype {
-            DType::F32 => candle_metal_kernels::GemmDType::F32,
-            DType::F16 => candle_metal_kernels::GemmDType::F16,
-            DType::BF16 => candle_metal_kernels::GemmDType::BF16,
-            dtype => {
-                return Err(
-                    MetalError::Message(format!("mlx matmul doesn't support {dtype:?}")).into(),
-                )
+        let mm = self.matmul(rhs, bmnk, lhs_l, rhs_l)?;
+        match s {
+            None => Ok(mm),
+            Some(alpha) => {
+                let (b, m, n, _) = bmnk;
+                let mm_l = Layout::contiguous((b, m, n));
+                mm.affine(&mm_l, alpha, 0.0)
             }
-        };
-        candle_metal_kernels::call_mlx_gemm(
-            &self.device.device,
-            &encoder,
-            &self.device.kernels,
-            dtype,
-            (b, m, n, k),
-            lhs_l.stride(),
-            lhs_l.start_offset() * self.dtype.size_in_bytes(),
-            &self.buffer,
-            rhs_l.stride(),
-            rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
-            &rhs.buffer,
-            &buffer,
-        )
-        .map_err(MetalError::from)?;
-
-        Ok(Self::new(
-            buffer,
-            self.device.clone(),
-            b * m * n,
-            self.dtype(),
-        ))
+        }
     }
 
     fn copy2d(
@@ -1835,6 +1826,50 @@ impl MetalStorage {
 
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
+    }
+
+    fn matmul(
+        &self,
+        rhs: &Self,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("matmul");
+        let dtype = match self.dtype {
+            DType::F32 => candle_metal_kernels::GemmDType::F32,
+            DType::F16 => candle_metal_kernels::GemmDType::F16,
+            DType::BF16 => candle_metal_kernels::GemmDType::BF16,
+            dtype => {
+                return Err(
+                    MetalError::Message(format!("mlx matmul doesn't support {dtype:?}")).into(),
+                )
+            }
+        };
+        candle_metal_kernels::call_mlx_gemm(
+            &self.device.device,
+            &encoder,
+            &self.device.kernels,
+            dtype,
+            (b, m, n, k),
+            lhs_l.stride(),
+            lhs_l.start_offset() * self.dtype.size_in_bytes(),
+            &self.buffer,
+            rhs_l.stride(),
+            rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+            &rhs.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::new(
+            buffer,
+            self.device.clone(),
+            b * m * n,
+            self.dtype(),
+        ))
     }
 
     pub fn binary(

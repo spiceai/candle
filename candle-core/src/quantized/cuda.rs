@@ -797,7 +797,6 @@ impl QCudaStorage {
         storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
-        use crate::backend::BackendStorage;
         let (n, k) = self_shape.dims2()?;
         let (b, m, k2) = match layout.shape().dims() {
             &[b, m, k2] => (b, m, k2),

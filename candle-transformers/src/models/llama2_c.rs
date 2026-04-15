@@ -297,12 +297,7 @@ struct Block {
 }
 
 impl Block {
-    fn new(
-        rms_1: RmsNorm,
-        attn: CausalSelfAttention,
-        rms_2: RmsNorm,
-        mlp: Mlp,
-    ) -> Self {
+    fn new(rms_1: RmsNorm, attn: CausalSelfAttention, rms_2: RmsNorm, mlp: Mlp) -> Self {
         Self {
             rms_1,
             attn,

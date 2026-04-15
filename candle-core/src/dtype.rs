@@ -1,7 +1,6 @@
 //! Types for elements that can be stored and manipulated using tensors.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::BackendStorage;
-use crate::cpu::kernels::VecOps;
 use crate::{CpuStorage, CpuStorageRef, Error, Result};
 
 /// The different types of elements allowed in tensors.
@@ -106,7 +105,6 @@ impl DType {
             Self::F16 => 2,
             Self::F32 => 4,
             Self::F64 => 8,
-            Self::F8E4M3 => 1,
             Self::F6E2M3 => 0, // 6 bits
             Self::F6E3M2 => 0, // 6 bits
             Self::F4 => 0,     // 4 bits

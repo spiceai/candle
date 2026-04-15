@@ -39,7 +39,10 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
         _n_per_row: usize,
     ) {
         let _ = (|| -> Result<()> {
-            crate::bail!("`from_float_imatrix` is unimplemented for {:?}", Self::DTYPE);
+            crate::bail!(
+                "`from_float_imatrix` is unimplemented for {:?}",
+                Self::DTYPE
+            );
         })();
     }
 
