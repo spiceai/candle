@@ -297,6 +297,7 @@ fn main() -> Result<()> {
     let eos_token = guess_eos_id(tos.tokenizer());
     let mut sampled = 0;
     let start_post_prompt = std::time::Instant::now();
+    #[allow(clippy::explicit_counter_loop)]
     for _ in 0..to_sample {
         if let Some(max_ctx) = context_length {
             if index_pos + 1 > max_ctx {

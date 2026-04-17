@@ -538,6 +538,7 @@ impl PaddleOCRVLModel {
         current_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
 
         // Subsequent forward passes (text only, using KV cache)
+        #[allow(clippy::explicit_counter_loop)]
         for _ in 1..max_new_tokens {
             let logits = self.forward(&current_ids, None, None, seqlen_offset)?;
             let next_token = logits
@@ -600,6 +601,7 @@ impl PaddleOCRVLModel {
 
         // Subsequent forward passes (text only, using KV cache)
         // Uses same incremental decoding as single-image generation
+        #[allow(clippy::explicit_counter_loop)]
         for _ in 1..max_new_tokens {
             let logits = self.forward(&current_ids, None, None, seqlen_offset)?;
             let next_token = logits
@@ -665,6 +667,7 @@ impl PaddleOCRVLModel {
         current_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
 
         // Subsequent forward passes (text only, using KV cache)
+        #[allow(clippy::explicit_counter_loop)]
         for _ in 1..max_new_tokens {
             let logits = self.forward(&current_ids, None, None, seqlen_offset)?;
             let next_token = logits
@@ -871,6 +874,7 @@ impl PaddleOCRVLModel {
         current_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
 
         // Subsequent forward passes (text only, using KV cache)
+        #[allow(clippy::explicit_counter_loop)]
         for _ in 1..max_new_tokens {
             let logits = self.forward(&current_ids, None, None, seqlen_offset)?;
             let logits = apply_repetition_penalty(&logits, &generated_tokens, repetition_penalty)?;
@@ -1047,6 +1051,7 @@ impl PaddleOCRVLModel {
         let mut seqlen_offset = input_ids.dim(1)?;
         let mut current_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
 
+        #[allow(clippy::explicit_counter_loop)]
         for step in 1..max_steps {
             // Compute position for M-RoPE
             let pos = seqlen_offset as i64 + self.mrope_position_delta;

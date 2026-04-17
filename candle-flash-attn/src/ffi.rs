@@ -34,7 +34,6 @@ extern "C" {
         d: u32,
         d_rounded: u32,
         softmax_scale: f32,
-        softcap: f32,
 
         seqlen_q: u32,
         seqlen_k: u32,
