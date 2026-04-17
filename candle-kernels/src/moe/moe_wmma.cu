@@ -231,7 +231,7 @@ __global__ void moe_gemm_grouped_kernel(
         size_m, size_n, size_k \
     );\
 
-extern "C" void moe_gemm_wmma(
+extern "C" void candle_moe_gemm_wmma(
     const void* input,                // [size_m, size_k]
     const void* weights,              // [num_experts, size_n, size_k]
     const int32_t* sorted_token_ids,  // [size_m] (Device)
