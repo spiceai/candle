@@ -94,7 +94,7 @@ pub fn moe_gemm(
         use core::ffi::c_void;
 
         unsafe {
-            ffi::moe_gemm_wmma(
+            ffi::candle_moe_gemm_wmma(
                 input.device_ptr(input.stream()).0 as *const c_void, // [size_m, size_k]
                 weights.device_ptr(weights.stream()).0 as *const c_void, // [num_experts, size_n, size_k]
                 sorted_token_ids.device_ptr(sorted_token_ids.stream()).0 as *const i32,

@@ -2,7 +2,7 @@ use core::ffi::c_void;
 #[allow(dead_code)]
 extern "C" {
     // for unquntized models
-    pub fn moe_gemm_wmma(
+    pub fn candle_moe_gemm_wmma(
         input: *const c_void,         // device pointer [size_m, size_k]
         weights: *const c_void,       // device pointer [num_experts, size_n, size_k]
         sorted_token_ids: *const i32, // device pointer [size_m]
