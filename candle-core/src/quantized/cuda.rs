@@ -4,7 +4,7 @@ use crate::{backend::BackendDevice, cuda_backend::WrapErr};
 use crate::{builder_arg as barg, CudaDevice, CudaStorage, Result};
 use half::f16;
 
-use cudarc::driver::{CudaSlice, CudaView, PushKernelArg};
+use cudarc::driver::{CudaSlice, CudaStream, CudaView, DevicePtr, PushKernelArg, SyncOnDrop};
 
 #[derive(Clone, Debug)]
 struct PaddedCudaSlice {
@@ -19,7 +19,8 @@ pub struct QCudaStorage {
     device: CudaDevice,
 }
 
-static FORCE_DMMV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) static FORCE_DMMV: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_force_dmmv(f: bool) {
     FORCE_DMMV.store(f, std::sync::atomic::Ordering::Relaxed)
@@ -33,6 +34,7 @@ pub const GGML_CUDA_MMV_X: usize = 32;
 pub const GGML_CUDA_MMV_Y: usize = 1;
 pub const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
 pub const CUDA_DEQUANTIZE_BLOCK_SIZE: usize = 256;
+pub const CUDA_GET_ROWS_BLOCK_SIZE: usize = 256;
 pub const MATRIX_ROW_PADDING: usize = 512;
 
 fn ceil_div(p: usize, q: usize) -> usize {
@@ -41,6 +43,20 @@ fn ceil_div(p: usize, q: usize) -> usize {
 
 fn pad(p: usize, q: usize) -> usize {
     ceil_div(p, q) * q
+}
+
+/// i-quant dtypes have a working CPU `to_float` dequant but no CUDA q8_1/dmmv
+/// kernel (and no CPU `vec_dot`), so they can only be run by dequantizing to f32
+/// and doing a normal matmul.
+fn is_iquant(dtype: GgmlDType) -> bool {
+    matches!(
+        dtype,
+        GgmlDType::Iq2Xxs
+            | GgmlDType::Iq3Xxs
+            | GgmlDType::Iq4Xs
+            | GgmlDType::Iq1S
+            | GgmlDType::Iq1M
+    )
 }
 
 fn quantize_q8_1(
@@ -129,6 +145,13 @@ fn dequantize_f32(
         GgmlDType::Q5K => ("dequantize_block_q5_K_f32", true, 64, nb),
         GgmlDType::Q6K => ("dequantize_block_q6_K_f32", true, 64, nb),
         GgmlDType::Q8K => ("dequantize_block_q8_K_f32", true, 32, nb),
+        GgmlDType::Iq2Xxs
+        | GgmlDType::Iq3Xxs
+        | GgmlDType::Iq4Xs
+        | GgmlDType::Iq1S
+        | GgmlDType::Iq1M => {
+            crate::bail!("CUDA dequant kernel for {dtype:?} not yet implemented; use CPU fallback")
+        }
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
@@ -189,6 +212,13 @@ fn dequantize_f16(
         GgmlDType::Q5K => ("dequantize_block_q5_K_f16", true, 64, nb),
         GgmlDType::Q6K => ("dequantize_block_q6_K_f16", true, 64, nb),
         GgmlDType::Q8K => ("dequantize_block_q8_K_f16", true, 32, nb),
+        GgmlDType::Iq2Xxs
+        | GgmlDType::Iq3Xxs
+        | GgmlDType::Iq4Xs
+        | GgmlDType::Iq1S
+        | GgmlDType::Iq1M => {
+            crate::bail!("CUDA dequant kernel for {dtype:?} not yet implemented; use CPU fallback")
+        }
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
@@ -217,6 +247,99 @@ fn dequantize_f16(
         barg!(builder, nb32 as i32);
         unsafe { builder.launch(cfg) }.w()?;
     }
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
+fn get_rows(
+    data: &PaddedCudaSlice,
+    dtype: GgmlDType,
+    hidden: usize,
+    ids: &CudaView<u32>,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    let (kernel_name, block_dim, block_num_y, can_stride_y) = match dtype {
+        GgmlDType::F32 => (
+            "get_rows_f32",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
+        GgmlDType::F16 => (
+            "get_rows_f16",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
+        GgmlDType::BF16 => (
+            "get_rows_bf16",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
+        GgmlDType::Q4_0 => (
+            "get_rows_q4_0",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, 2 * CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
+        GgmlDType::Q4_1 => (
+            "get_rows_q4_1",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, 2 * CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
+        GgmlDType::Q5_0 => (
+            "get_rows_q5_0",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, 2 * CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
+        GgmlDType::Q5_1 => (
+            "get_rows_q5_1",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, 2 * CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
+        GgmlDType::Q8_0 => (
+            "get_rows_q8_0",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, 2 * CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
+        GgmlDType::Q2K => ("get_rows_q2_K", 64, hidden / dtype.block_size(), false),
+        GgmlDType::Q3K => ("get_rows_q3_K", 64, hidden / dtype.block_size(), false),
+        GgmlDType::Q4K => ("get_rows_q4_K", 32, hidden / dtype.block_size(), false),
+        GgmlDType::Q5K => ("get_rows_q5_K", 64, hidden / dtype.block_size(), false),
+        GgmlDType::Q6K => ("get_rows_q6_K", 64, hidden / dtype.block_size(), false),
+        _ => crate::bail!("unsupported dtype for CUDA quantized embedding {dtype:?}"),
+    };
+    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
+    let ids_len = ids.len();
+    let dst = unsafe { dev.alloc::<f32>(ids_len * hidden)? };
+    if ids_len == 0 {
+        return Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()));
+    }
+    if !can_stride_y && block_num_y > u16::MAX as usize {
+        crate::bail!("quantized embedding hidden size {hidden} exceeds CUDA grid y limit")
+    }
+    let grid_y = if can_stride_y {
+        block_num_y.min(u16::MAX as usize)
+    } else {
+        block_num_y
+    };
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (ids_len as u32, grid_y as u32, 1),
+        block_dim: (block_dim as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let row_stride = hidden * dtype.type_size() / dtype.block_size();
+
+    let mut builder = func.builder();
+    builder.arg(&data.inner);
+    builder.arg(ids);
+    builder.arg(&dst);
+    barg!(builder, hidden as i64, row_stride);
+    unsafe { builder.launch(cfg) }.w()?;
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
@@ -596,6 +719,16 @@ impl QCudaStorage {
             GgmlDType::Q5K => deq::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out),
             GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
             GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
+            // i-quants: no CUDA dequant kernel yet, dequantized on the CPU via to_float.
+            GgmlDType::Iq2Xxs => {
+                deq::<crate::quantized::BlockIQ2XXS>(&buffer, block_len, &mut out)
+            }
+            GgmlDType::Iq3Xxs => {
+                deq::<crate::quantized::BlockIQ3XXS>(&buffer, block_len, &mut out)
+            }
+            GgmlDType::Iq4Xs => deq::<crate::quantized::BlockIQ4XS>(&buffer, block_len, &mut out),
+            GgmlDType::Iq1S => deq::<crate::quantized::BlockIQ1S>(&buffer, block_len, &mut out),
+            GgmlDType::Iq1M => deq::<crate::quantized::BlockIQ1M>(&buffer, block_len, &mut out),
         }
 
         self.device
@@ -714,12 +847,67 @@ impl QCudaStorage {
         self.data.len
     }
 
+    pub fn embedding(
+        &self,
+        rows: usize,
+        hidden: usize,
+        ids: &CudaStorage,
+        ids_l: &crate::Layout,
+    ) -> Result<CudaStorage> {
+        if !ids_l.is_contiguous() {
+            crate::bail!("quantized embedding requires contiguous ids")
+        }
+        if !hidden.is_multiple_of(self.dtype.block_size()) {
+            crate::bail!(
+                "quantized embedding hidden size {hidden} is not divisible by block size {}",
+                self.dtype.block_size()
+            )
+        }
+        let expected_size = rows * hidden * self.dtype.type_size() / self.dtype.block_size();
+        if self.storage_size_in_bytes() != expected_size {
+            crate::bail!(
+                "quantized tensor has {} bytes, expected {expected_size}",
+                self.storage_size_in_bytes()
+            )
+        }
+        let ids = ids.as_cuda_slice::<u32>()?;
+        let ids = match ids_l.contiguous_offsets() {
+            Some((o1, o2)) => ids.slice(o1..o2),
+            None => Err(crate::Error::RequiresContiguous {
+                op: "quantized-embedding",
+            }
+            .bt())?,
+        };
+        get_rows(&self.data, self.dtype, hidden, &ids, self.device())
+    }
+
     pub fn fwd(
         &self,
         self_shape: &crate::Shape,
         storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
+        // i-quants have no CUDA q8_1 / dmmv kernel (and no CPU vec_dot), and the new
+        // fast_mmvq/fast_mmq paths don't handle them either, so route every shape
+        // through dequantize_matmul, which (for these dtypes) dequantizes the weight to
+        // f32 on the CPU and does a plain f32 matmul. The weight stays quantized in
+        // memory; only the active weight is materialized as a transient f32 buffer per
+        // call. Must run before the optimized paths below.
+        if is_iquant(self.dtype) {
+            return self.dequantize_matmul(self_shape, storage, layout);
+        }
+
+        // Optimized MMVQ and MMQ paths (support most paths: BF16/F16/F32, batch 1-8, all quant types, reuses per-device workspace).
+        if !FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(result) = super::fast_mmvq::try_fwd(self, self_shape, storage, layout)? {
+                return Ok(result);
+            }
+            if let Some(result) = super::fast_mmq::try_fwd(self, self_shape, storage, layout)? {
+                return Ok(result);
+            }
+        }
+
+        // Fallback
         let max_bm = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
             1
         } else {
@@ -745,8 +933,15 @@ impl QCudaStorage {
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {
-        use cudarc::driver::DevicePtr;
         Ok(self.data.inner.device_ptr(self.data.inner.stream()).0 as *const u8)
+    }
+
+    pub fn device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a CudaStream,
+    ) -> Result<(*const u8, SyncOnDrop<'a>)> {
+        let (ptr, guard) = self.data.inner.device_ptr(stream);
+        Ok((ptr as *const u8, guard))
     }
 }
 
@@ -807,7 +1002,10 @@ impl QCudaStorage {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
         }
 
-        let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
+        let out = if is_iquant(self.dtype) || FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // CPU dequant -> f32 -> plain matmul. Required for i-quants (no q8_1 kernel);
+            // also the FORCE_DMMV escape hatch for the other dtypes.
             let data_f32 = self.dequantize(n * k)?;
             let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
             storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?
