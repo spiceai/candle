@@ -1036,6 +1036,16 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
+
+        // i-quant formats are dequant-only (no quantized matmul / vec_dot), so
+        // there is no ggml reference matmul error for them.
+        GgmlDType::Iq2Xxs
+        | GgmlDType::Iq3Xxs
+        | GgmlDType::Iq4Xs
+        | GgmlDType::Iq1S
+        | GgmlDType::Iq1M => {
+            bail!("no ggml reference matmul error for i-quant dtype {dtype:?} (dequant-only)")
+        }
     };
     Ok(err)
 }

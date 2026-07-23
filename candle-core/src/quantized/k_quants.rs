@@ -2486,6 +2486,329 @@ impl GgmlType for bf16 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// i-quant blocks (IQ2_XXS, IQ3_XXS, IQ4_XS, IQ1_S, IQ1_M).
+//
+// Only `to_float` (dequantization) is implemented; these formats require an
+// importance matrix to quantize, so `from_float` is unsupported, and the
+// quantized CPU mat-mul (`vec_dot`) path is not used for them (inference runs
+// through dequantize + matmul), so the vec-dot methods bail.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ2XXS {
+    pub(crate) d: f16,
+    pub(crate) qs: [u16; QK_K / 8],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ2XXS>() == 66);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ3XXS {
+    pub(crate) d: f16,
+    pub(crate) qs: [u8; 3 * QK_K / 8],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ3XXS>() == 98);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ4XS {
+    pub(crate) d: f16,
+    pub(crate) scales_h: u16,
+    pub(crate) scales_l: [u8; QK_K / 64],
+    pub(crate) qs: [u8; QK_K / 2],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ4XS>() == 136);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ1S {
+    pub(crate) d: f16,
+    pub(crate) qs: [u8; QK_K / 8],
+    pub(crate) qh: [u16; QK_K / 32],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ1S>() == 50);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ1M {
+    pub(crate) qs: [u8; QK_K / 8],
+    pub(crate) qh: [u8; QK_K / 16],
+    pub(crate) scales: [u8; QK_K / 32],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ1M>() == 56);
+
+impl GgmlType for BlockIQ2XXS {
+    const DTYPE: GgmlDType = GgmlDType::Iq2Xxs;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq2_xxs` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::{IQ2XXS_GRID, KMASK_IQ2XS, KSIGNS_IQ2XS};
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = block.d.to_f32();
+            for ib32 in 0..(QK_K / 32) {
+                let q2 = &block.qs[4 * ib32..4 * ib32 + 4];
+                // The first two u16 hold four 8-bit grid indices (little-endian byte order).
+                let aux8 = [
+                    (q2[0] & 0xff) as u8,
+                    (q2[0] >> 8) as u8,
+                    (q2[1] & 0xff) as u8,
+                    (q2[1] >> 8) as u8,
+                ];
+                // The last two u16 hold the 4-bit scale (top nibble) and 4x7 sign bits.
+                let aux32_1 = q2[2] as u32 | ((q2[3] as u32) << 16);
+                let db = d * (0.5 + (aux32_1 >> 28) as f32) * 0.25;
+                for l in 0..4 {
+                    let grid = IQ2XXS_GRID[aux8[l] as usize].to_le_bytes();
+                    let signs = KSIGNS_IQ2XS[((aux32_1 >> (7 * l)) & 127) as usize];
+                    let off = 32 * ib32 + 8 * l;
+                    for j in 0..8 {
+                        let s = if signs & KMASK_IQ2XS[j] != 0 { -1.0 } else { 1.0 };
+                        y[off + j] = db * grid[j] as f32 * s;
+                    }
+                }
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ2_XXS quantization requires an importance matrix and is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        // i-quant CPU mat-mul (vec_dot) is unimplemented; inference dequantizes then matmuls.
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+impl GgmlType for BlockIQ3XXS {
+    const DTYPE: GgmlDType = GgmlDType::Iq3Xxs;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq3_xxs` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::{IQ3XXS_GRID, KMASK_IQ2XS, KSIGNS_IQ2XS};
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = block.d.to_f32();
+            let qs = &block.qs;
+            // Scales and signs live in a separate region starting at byte QK_K/4 = 64.
+            let sas = QK_K / 4;
+            // Running offset into the grid-index region (8 bytes per sub-block).
+            let mut qs_off = 0usize;
+            for ib32 in 0..(QK_K / 32) {
+                let base = sas + 4 * ib32;
+                let aux32 = qs[base] as u32
+                    | ((qs[base + 1] as u32) << 8)
+                    | ((qs[base + 2] as u32) << 16)
+                    | ((qs[base + 3] as u32) << 24);
+                let db = d * (0.5 + (aux32 >> 28) as f32) * 0.5;
+                for l in 0..4 {
+                    let signs = KSIGNS_IQ2XS[((aux32 >> (7 * l)) & 127) as usize];
+                    let grid1 = IQ3XXS_GRID[qs[qs_off + 2 * l] as usize].to_le_bytes();
+                    let grid2 = IQ3XXS_GRID[qs[qs_off + 2 * l + 1] as usize].to_le_bytes();
+                    let off = 32 * ib32 + 8 * l;
+                    for j in 0..4 {
+                        let s0 = if signs & KMASK_IQ2XS[j] != 0 { -1.0 } else { 1.0 };
+                        let s1 = if signs & KMASK_IQ2XS[j + 4] != 0 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        y[off + j] = db * grid1[j] as f32 * s0;
+                        y[off + j + 4] = db * grid2[j] as f32 * s1;
+                    }
+                }
+                qs_off += 8;
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ3_XXS quantization requires an importance matrix and is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+impl GgmlType for BlockIQ4XS {
+    const DTYPE: GgmlDType = GgmlDType::Iq4Xs;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq4_xs` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::KVALUES_IQ4NL;
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = block.d.to_f32();
+            let qs = &block.qs;
+            for ib in 0..(QK_K / 32) {
+                // 6-bit scale: 4 low bits from scales_l, 2 high bits from scales_h, bias 32.
+                let ls = (((block.scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) as i32)
+                    | ((((block.scales_h >> (2 * ib)) & 3) as i32) << 4);
+                let dl = d * (ls - 32) as f32;
+                let off = 32 * ib;
+                let qoff = 16 * ib;
+                for j in 0..16 {
+                    y[off + j] = dl * KVALUES_IQ4NL[(qs[qoff + j] & 0xf) as usize] as f32;
+                    y[off + j + 16] = dl * KVALUES_IQ4NL[(qs[qoff + j] >> 4) as usize] as f32;
+                }
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ4_XS quantization is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+impl GgmlType for BlockIQ1S {
+    const DTYPE: GgmlDType = GgmlDType::Iq1S;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq1_s` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::{IQ1S_DELTA, IQ1S_GRID};
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = block.d.to_f32();
+            let qs = &block.qs;
+            let qh = &block.qh;
+            let mut qs_i = 0usize;
+            for ib in 0..(QK_K / 32) {
+                // Single 3-bit sub-scale lives in the top 3 bits (below the sign bit).
+                let dl = d * (2 * ((qh[ib] >> 12) & 7) + 1) as f32;
+                // Sign bit selects the (fixed) delta sign for the whole sub-block.
+                let delta = if qh[ib] & 0x8000 != 0 {
+                    -IQ1S_DELTA
+                } else {
+                    IQ1S_DELTA
+                };
+                let off = 32 * ib;
+                // Four groups of 8: 8 grid-index bits from qs + 3 high bits from qh.
+                for l in 0..4 {
+                    let idx = qs[qs_i + l] as u16 | (((qh[ib] >> (3 * l)) & 7) << 8);
+                    let grid = IQ1S_GRID[idx as usize].to_le_bytes();
+                    for j in 0..8 {
+                        y[off + 8 * l + j] = dl * (grid[j] as i8 as f32 + delta);
+                    }
+                }
+                qs_i += 4;
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ1_S quantization requires an importance matrix and is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        // i-quant CPU mat-mul (vec_dot) is unimplemented; inference dequantizes then matmuls.
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+impl GgmlType for BlockIQ1M {
+    const DTYPE: GgmlDType = GgmlDType::Iq1M;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq1_m` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::{IQ1S_DELTA, IQ1S_GRID};
+        for (block, y) in group_for_dequantization(xs, ys) {
+            // `scales` (8 bytes) viewed as four little-endian u16.
+            let sc = [
+                block.scales[0] as u16 | ((block.scales[1] as u16) << 8),
+                block.scales[2] as u16 | ((block.scales[3] as u16) << 8),
+                block.scales[4] as u16 | ((block.scales[5] as u16) << 8),
+                block.scales[6] as u16 | ((block.scales[7] as u16) << 8),
+            ];
+            // Superblock scale = top nibbles of the four u16, reinterpreted as f16.
+            let scale_u16 = (sc[0] >> 12)
+                | ((sc[1] >> 8) & 0x00f0)
+                | ((sc[2] >> 4) & 0x0f00)
+                | (sc[3] & 0xf000);
+            let d = f16::from_bits(scale_u16).to_f32();
+            let qs = &block.qs;
+            let qh = &block.qh;
+            let mut qs_i = 0usize;
+            let mut qh_i = 0usize;
+            for ib in 0..(QK_K / 32) {
+                // Two 3-bit sub-scales packed in sc[ib/2].
+                let dl1 = d * (2 * ((sc[ib / 2] >> (6 * (ib % 2))) & 0x7) + 1) as f32;
+                let dl2 = d * (2 * ((sc[ib / 2] >> (6 * (ib % 2) + 3)) & 0x7) + 1) as f32;
+                // 11-bit grid indices: 8 bits from qs + 3 bits from qh.
+                let idx = [
+                    qs[qs_i] as u16 | (((qh[qh_i] as u16) << 8) & 0x700),
+                    qs[qs_i + 1] as u16 | (((qh[qh_i] as u16) << 4) & 0x700),
+                    qs[qs_i + 2] as u16 | (((qh[qh_i + 1] as u16) << 8) & 0x700),
+                    qs[qs_i + 3] as u16 | (((qh[qh_i + 1] as u16) << 4) & 0x700),
+                ];
+                let delta = [
+                    if qh[qh_i] & 0x08 != 0 { -IQ1S_DELTA } else { IQ1S_DELTA },
+                    if qh[qh_i] & 0x80 != 0 { -IQ1S_DELTA } else { IQ1S_DELTA },
+                    if qh[qh_i + 1] & 0x08 != 0 { -IQ1S_DELTA } else { IQ1S_DELTA },
+                    if qh[qh_i + 1] & 0x80 != 0 { -IQ1S_DELTA } else { IQ1S_DELTA },
+                ];
+                let off = 32 * ib;
+                // First two groups use dl1, next two use dl2. Grid bytes are signed i8.
+                for l in 0..2 {
+                    let grid = IQ1S_GRID[idx[l] as usize].to_le_bytes();
+                    for j in 0..8 {
+                        y[off + 8 * l + j] = dl1 * (grid[j] as i8 as f32 + delta[l]);
+                    }
+                }
+                for l in 2..4 {
+                    let grid = IQ1S_GRID[idx[l] as usize].to_le_bytes();
+                    for j in 0..8 {
+                        y[off + 8 * l + j] = dl2 * (grid[j] as i8 as f32 + delta[l]);
+                    }
+                }
+                qs_i += 4;
+                qh_i += 2;
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ1_M quantization requires an importance matrix and is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
 macro_rules! verify_block_size {
     ( $block_type:ident ) => {
         const _: () =
@@ -2503,5 +2826,6 @@ macro_rules! verify_block_sizes {
 
 verify_block_sizes!(
     BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
-    BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
+    BlockQ5K, BlockQ6K, BlockQ8K, BlockIQ2XXS, BlockIQ3XXS, BlockIQ4XS, BlockIQ1S, BlockIQ1M, f32,
+    f16, bf16
 );
