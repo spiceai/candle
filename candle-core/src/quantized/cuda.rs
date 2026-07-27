@@ -145,11 +145,12 @@ fn dequantize_f32(
         GgmlDType::Q5K => ("dequantize_block_q5_K_f32", true, 64, nb),
         GgmlDType::Q6K => ("dequantize_block_q6_K_f32", true, 64, nb),
         GgmlDType::Q8K => ("dequantize_block_q8_K_f32", true, 32, nb),
-        GgmlDType::Iq2Xxs
-        | GgmlDType::Iq3Xxs
-        | GgmlDType::Iq4Xs
-        | GgmlDType::Iq1S
-        | GgmlDType::Iq1M => {
+        // One thread per 8-weight group: 256 weights / 8 = 32 threads per block.
+        GgmlDType::Iq1S => ("dequantize_block_iq1_s_f32", true, 32, nb),
+        GgmlDType::Iq2Xxs => ("dequantize_block_iq2_xxs_f32", true, 32, nb),
+        GgmlDType::Iq3Xxs => ("dequantize_block_iq3_xxs_f32", true, 32, nb),
+        GgmlDType::Iq4Xs => ("dequantize_block_iq4_xs_f32", true, 32, nb),
+        GgmlDType::Iq1M => {
             crate::bail!("CUDA dequant kernel for {dtype:?} not yet implemented; use CPU fallback")
         }
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
@@ -212,11 +213,11 @@ fn dequantize_f16(
         GgmlDType::Q5K => ("dequantize_block_q5_K_f16", true, 64, nb),
         GgmlDType::Q6K => ("dequantize_block_q6_K_f16", true, 64, nb),
         GgmlDType::Q8K => ("dequantize_block_q8_K_f16", true, 32, nb),
-        GgmlDType::Iq2Xxs
-        | GgmlDType::Iq3Xxs
-        | GgmlDType::Iq4Xs
-        | GgmlDType::Iq1S
-        | GgmlDType::Iq1M => {
+        GgmlDType::Iq1S => ("dequantize_block_iq1_s_f16", true, 32, nb),
+        GgmlDType::Iq2Xxs => ("dequantize_block_iq2_xxs_f16", true, 32, nb),
+        GgmlDType::Iq3Xxs => ("dequantize_block_iq3_xxs_f16", true, 32, nb),
+        GgmlDType::Iq4Xs => ("dequantize_block_iq4_xs_f16", true, 32, nb),
+        GgmlDType::Iq1M => {
             crate::bail!("CUDA dequant kernel for {dtype:?} not yet implemented; use CPU fallback")
         }
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
@@ -692,6 +693,14 @@ impl QCudaStorage {
                 | GgmlDType::Q5K
                 | GgmlDType::Q6K
                 | GgmlDType::Q8K
+                // i-quants have no q8_1 mat-mul kernel, so every use of an IQ1_S weight goes
+                // through here. Without a device kernel that means copying the quantized
+                // bytes to the host, expanding them on CPU, and uploading the result — per
+                // call, per weight. For a MoE model that is the dominant cost.
+                | GgmlDType::Iq1S
+                | GgmlDType::Iq2Xxs
+                | GgmlDType::Iq3Xxs
+                | GgmlDType::Iq4Xs
         );
         if fast_kernel {
             return dequantize_f32(&self.data, self.dtype, elem_count, self.device());
