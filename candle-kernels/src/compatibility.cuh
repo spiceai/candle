@@ -7,7 +7,13 @@
 
 // FIXME: the minimum compute capabilities are just guesses since the table is not specific enough
 
-#if __CUDA_ARCH__ < 800
+// CUDA 12.2 and newer declare __hmax_nan/__hmin_nan in cuda_fp16.h for every
+// architecture, so defining them here as well is a redefinition error. Older
+// toolkits only emit them for sm_80+, where they are native instructions, and
+// need this software fallback for sm_75 (Turing). Compare the toolkit version
+// as a whole: a major/minor pair compared component-wise misreads 13.0 as older
+// than 12.2.
+#if (__CUDACC_VER_MAJOR__ * 100 + __CUDACC_VER_MINOR__ < 1202) && __CUDA_ARCH__ < 800
 __device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
     return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
 }
