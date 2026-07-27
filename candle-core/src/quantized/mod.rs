@@ -389,13 +389,18 @@ impl GgmlDType {
             Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
             Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
             Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
-            Self::Iq2Xxs => {
-                Box::new(vec![BlockIQ2XXS::zeros(); elem_count / BlockIQ2XXS::BLCK_SIZE])
-            }
-            Self::Iq3Xxs => {
-                Box::new(vec![BlockIQ3XXS::zeros(); elem_count / BlockIQ3XXS::BLCK_SIZE])
-            }
-            Self::Iq4Xs => Box::new(vec![BlockIQ4XS::zeros(); elem_count / BlockIQ4XS::BLCK_SIZE]),
+            Self::Iq2Xxs => Box::new(vec![
+                BlockIQ2XXS::zeros();
+                elem_count / BlockIQ2XXS::BLCK_SIZE
+            ]),
+            Self::Iq3Xxs => Box::new(vec![
+                BlockIQ3XXS::zeros();
+                elem_count / BlockIQ3XXS::BLCK_SIZE
+            ]),
+            Self::Iq4Xs => Box::new(vec![
+                BlockIQ4XS::zeros();
+                elem_count / BlockIQ4XS::BLCK_SIZE
+            ]),
             Self::Iq1S => Box::new(vec![BlockIQ1S::zeros(); elem_count / BlockIQ1S::BLCK_SIZE]),
             Self::Iq1M => Box::new(vec![BlockIQ1M::zeros(); elem_count / BlockIQ1M::BLCK_SIZE]),
             Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),

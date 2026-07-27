@@ -66,7 +66,10 @@ fn main() {
         }
     }
 
-    println!("== dtype tensor counts across {} shards ==", shard_paths.len());
+    println!(
+        "== dtype tensor counts across {} shards ==",
+        shard_paths.len()
+    );
     for (label, dt) in targets.iter() {
         println!("  {label:8} = {}", counts.get(dt).copied().unwrap_or(0));
     }
@@ -92,11 +95,17 @@ fn main() {
         let elems = shape.elem_count();
         let block_size = dt.block_size();
         let type_size = dt.type_size();
-        assert_eq!(elems % block_size, 0, "{label}: elems not divisible by block size");
+        assert_eq!(
+            elems % block_size,
+            0,
+            "{label}: elems not divisible by block size"
+        );
         let n_blocks = elems / block_size;
         let expected_bytes = n_blocks * type_size;
 
-        let qtensor = content.tensor(&mut f, name, &device).expect("read+load tensor");
+        let qtensor = content
+            .tensor(&mut f, name, &device)
+            .expect("read+load tensor");
         let on_disk_bytes = qtensor.storage_size_in_bytes();
         let byte_ok = on_disk_bytes == expected_bytes;
 
@@ -130,7 +139,10 @@ fn main() {
         all_ok &= ok;
 
         println!("== {label} ==");
-        println!("  shard   : {}", shard.file_name().unwrap().to_string_lossy());
+        println!(
+            "  shard   : {}",
+            shard.file_name().unwrap().to_string_lossy()
+        );
         println!("  tensor  : {name}  shape={:?}", shape.dims());
         println!(
             "  bytes   : on_disk={on_disk_bytes} expected={expected_bytes} (n_blocks={n_blocks} type_size={type_size})  [{}]",
@@ -138,7 +150,11 @@ fn main() {
         );
         println!(
             "  values  : n={n} finite={n_finite} nonzero={n_nonzero}  [{}]",
-            if all_finite && any_nonzero { "OK" } else { "BAD" }
+            if all_finite && any_nonzero {
+                "OK"
+            } else {
+                "BAD"
+            }
         );
         println!(
             "  range   : min={mn:.5} max={mx:.5} rms={rms:.5}  [{}]",

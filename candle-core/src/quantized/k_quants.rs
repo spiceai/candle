@@ -2840,7 +2840,11 @@ impl GgmlType for BlockIQ2XXS {
                     let signs = KSIGNS_IQ2XS[((aux32_1 >> (7 * l)) & 127) as usize];
                     let off = 32 * ib32 + 8 * l;
                     for j in 0..8 {
-                        let s = if signs & KMASK_IQ2XS[j] != 0 { -1.0 } else { 1.0 };
+                        let s = if signs & KMASK_IQ2XS[j] != 0 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
                         y[off + j] = db * grid[j] as f32 * s;
                     }
                 }
@@ -2890,7 +2894,11 @@ impl GgmlType for BlockIQ3XXS {
                     let grid2 = IQ3XXS_GRID[qs[qs_off + 2 * l + 1] as usize].to_le_bytes();
                     let off = 32 * ib32 + 8 * l;
                     for j in 0..4 {
-                        let s0 = if signs & KMASK_IQ2XS[j] != 0 { -1.0 } else { 1.0 };
+                        let s0 = if signs & KMASK_IQ2XS[j] != 0 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
                         let s1 = if signs & KMASK_IQ2XS[j + 4] != 0 {
                             -1.0
                         } else {
@@ -3045,10 +3053,26 @@ impl GgmlType for BlockIQ1M {
                     qs[qs_i + 3] as u16 | (((qh[qh_i + 1] as u16) << 4) & 0x700),
                 ];
                 let delta = [
-                    if qh[qh_i] & 0x08 != 0 { -IQ1S_DELTA } else { IQ1S_DELTA },
-                    if qh[qh_i] & 0x80 != 0 { -IQ1S_DELTA } else { IQ1S_DELTA },
-                    if qh[qh_i + 1] & 0x08 != 0 { -IQ1S_DELTA } else { IQ1S_DELTA },
-                    if qh[qh_i + 1] & 0x80 != 0 { -IQ1S_DELTA } else { IQ1S_DELTA },
+                    if qh[qh_i] & 0x08 != 0 {
+                        -IQ1S_DELTA
+                    } else {
+                        IQ1S_DELTA
+                    },
+                    if qh[qh_i] & 0x80 != 0 {
+                        -IQ1S_DELTA
+                    } else {
+                        IQ1S_DELTA
+                    },
+                    if qh[qh_i + 1] & 0x08 != 0 {
+                        -IQ1S_DELTA
+                    } else {
+                        IQ1S_DELTA
+                    },
+                    if qh[qh_i + 1] & 0x80 != 0 {
+                        -IQ1S_DELTA
+                    } else {
+                        IQ1S_DELTA
+                    },
                 ];
                 let off = 32 * ib;
                 // First two groups use dl1, next two use dl2. Grid bytes are signed i8.
@@ -3099,7 +3123,24 @@ macro_rules! verify_block_sizes {
 }
 
 verify_block_sizes!(
-    BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
-    BlockQ5K, BlockQ6K, BlockQ8K, BlockIQ2XXS, BlockIQ3XXS, BlockIQ4XS, BlockIQ1S, BlockIQ1M, f32,
-    f16, bf16
+    BlockQ4_0,
+    BlockQ4_1,
+    BlockQ5_0,
+    BlockQ5_1,
+    BlockQ8_0,
+    BlockQ8_1,
+    BlockQ2K,
+    BlockQ3K,
+    BlockQ4K,
+    BlockQ5K,
+    BlockQ6K,
+    BlockQ8K,
+    BlockIQ2XXS,
+    BlockIQ3XXS,
+    BlockIQ4XS,
+    BlockIQ1S,
+    BlockIQ1M,
+    f32,
+    f16,
+    bf16
 );

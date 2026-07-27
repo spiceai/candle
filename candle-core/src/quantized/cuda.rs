@@ -720,12 +720,8 @@ impl QCudaStorage {
             GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
             GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
             // i-quants: no CUDA dequant kernel yet, dequantized on the CPU via to_float.
-            GgmlDType::Iq2Xxs => {
-                deq::<crate::quantized::BlockIQ2XXS>(&buffer, block_len, &mut out)
-            }
-            GgmlDType::Iq3Xxs => {
-                deq::<crate::quantized::BlockIQ3XXS>(&buffer, block_len, &mut out)
-            }
+            GgmlDType::Iq2Xxs => deq::<crate::quantized::BlockIQ2XXS>(&buffer, block_len, &mut out),
+            GgmlDType::Iq3Xxs => deq::<crate::quantized::BlockIQ3XXS>(&buffer, block_len, &mut out),
             GgmlDType::Iq4Xs => deq::<crate::quantized::BlockIQ4XS>(&buffer, block_len, &mut out),
             GgmlDType::Iq1S => deq::<crate::quantized::BlockIQ1S>(&buffer, block_len, &mut out),
             GgmlDType::Iq1M => deq::<crate::quantized::BlockIQ1M>(&buffer, block_len, &mut out),
