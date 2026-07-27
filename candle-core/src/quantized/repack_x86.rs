@@ -583,7 +583,10 @@ pub(crate) fn amx_available() -> bool {
         // is_x86_feature_detected!("amx-int8") is unstable; read CPUID leaf 7 directly
         #[cfg(target_arch = "x86_64")]
         let has_amx = {
-            let info = core::arch::x86_64::__cpuid_count(7, 0);
+            // `__cpuid_count` became a safe intrinsic; keep the block for toolchains
+            // where it is still `unsafe` and silence the redundancy on newer ones.
+            #[allow(unused_unsafe)]
+            let info = unsafe { core::arch::x86_64::__cpuid_count(7, 0) };
             info.edx & (1 << 25) != 0 && info.edx & (1 << 24) != 0
         };
         #[cfg(not(target_arch = "x86_64"))]
