@@ -1093,6 +1093,8 @@ impl QTensor {
 }
 
 impl QTensor {
+    /// Only the x86 repacking path needs the raw CPU-side storage.
+    #[cfg(target_arch = "x86_64")]
     pub(crate) fn storage_ref(&self) -> &dyn QuantizedType {
         match &self.storage {
             QStorage::Cpu(s) => s.as_ref(),

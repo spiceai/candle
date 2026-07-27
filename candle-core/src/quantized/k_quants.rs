@@ -2978,11 +2978,11 @@ impl GgmlType for BlockIQ1S {
             let qs = &block.qs;
             let qh = &block.qh;
             let mut qs_i = 0usize;
-            for ib in 0..(QK_K / 32) {
+            for (ib, &qh_ib) in qh.iter().enumerate() {
                 // Single 3-bit sub-scale lives in the top 3 bits (below the sign bit).
-                let dl = d * (2 * ((qh[ib] >> 12) & 7) + 1) as f32;
+                let dl = d * (2 * ((qh_ib >> 12) & 7) + 1) as f32;
                 // Sign bit selects the (fixed) delta sign for the whole sub-block.
-                let delta = if qh[ib] & 0x8000 != 0 {
+                let delta = if qh_ib & 0x8000 != 0 {
                     -IQ1S_DELTA
                 } else {
                     IQ1S_DELTA
@@ -2990,7 +2990,7 @@ impl GgmlType for BlockIQ1S {
                 let off = 32 * ib;
                 // Four groups of 8: 8 grid-index bits from qs + 3 high bits from qh.
                 for l in 0..4 {
-                    let idx = qs[qs_i + l] as u16 | (((qh[ib] >> (3 * l)) & 7) << 8);
+                    let idx = qs[qs_i + l] as u16 | (((qh_ib >> (3 * l)) & 7) << 8);
                     let grid = IQ1S_GRID[idx as usize].to_le_bytes();
                     for j in 0..8 {
                         y[off + 8 * l + j] = dl * (grid[j] as i8 as f32 + delta);
