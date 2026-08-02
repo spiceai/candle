@@ -45,10 +45,10 @@ fn pad(p: usize, q: usize) -> usize {
     ceil_div(p, q) * q
 }
 
-/// i-quant dtypes have a working CPU `to_float` dequant but no CUDA q8_1/dmmv
-/// kernel (and no CPU `vec_dot`), so they can only be run by dequantizing to f32
-/// and doing a normal matmul.
-fn is_iquant(dtype: GgmlDType) -> bool {
+/// Dtypes with a working CPU `to_float` dequant but no CUDA q8_1/dmmv kernel
+/// (and no CPU `vec_dot`): the i-quants and MXFP4. They can only be run by
+/// dequantizing to f32 and doing a normal matmul.
+fn is_dequant_only(dtype: GgmlDType) -> bool {
     matches!(
         dtype,
         GgmlDType::Iq2Xxs
@@ -56,6 +56,7 @@ fn is_iquant(dtype: GgmlDType) -> bool {
             | GgmlDType::Iq4Xs
             | GgmlDType::Iq1S
             | GgmlDType::Iq1M
+            | GgmlDType::Mxfp4
     )
 }
 
@@ -139,6 +140,7 @@ fn dequantize_f32(
             ceil_div(elem_count, 2 * CUDA_DEQUANTIZE_BLOCK_SIZE),
         ),
         GgmlDType::Q8_0 => ("dequantize_block_q8_0_f32", false, 32, nb),
+        GgmlDType::Mxfp4 => ("dequantize_block_mxfp4_f32", false, 32, nb),
         GgmlDType::Q2K => ("dequantize_block_q2_K_f32", true, 64, nb),
         GgmlDType::Q3K => ("dequantize_block_q3_K_f32", true, 64, nb),
         GgmlDType::Q4K => ("dequantize_block_q4_K_f32", true, 32, nb),
@@ -207,6 +209,7 @@ fn dequantize_f16(
             ceil_div(elem_count, 2 * CUDA_DEQUANTIZE_BLOCK_SIZE),
         ),
         GgmlDType::Q8_0 => ("dequantize_block_q8_0_f16", false, 32, nb),
+        GgmlDType::Mxfp4 => ("dequantize_block_mxfp4_f16", false, 32, nb),
         GgmlDType::Q2K => ("dequantize_block_q2_K_f16", true, 64, nb),
         GgmlDType::Q3K => ("dequantize_block_q3_K_f16", true, 64, nb),
         GgmlDType::Q4K => ("dequantize_block_q4_K_f16", true, 32, nb),
@@ -701,6 +704,9 @@ impl QCudaStorage {
                 | GgmlDType::Iq2Xxs
                 | GgmlDType::Iq3Xxs
                 | GgmlDType::Iq4Xs
+                // MXFP4 is in the same boat: no q8_1 mat-mul kernel, so the
+                // device dequant kernel is what keeps it off the host round trip.
+                | GgmlDType::Mxfp4
         );
         if fast_kernel {
             return dequantize_f32(&self.data, self.dtype, elem_count, self.device());
@@ -734,6 +740,7 @@ impl QCudaStorage {
             GgmlDType::Iq4Xs => deq::<crate::quantized::BlockIQ4XS>(&buffer, block_len, &mut out),
             GgmlDType::Iq1S => deq::<crate::quantized::BlockIQ1S>(&buffer, block_len, &mut out),
             GgmlDType::Iq1M => deq::<crate::quantized::BlockIQ1M>(&buffer, block_len, &mut out),
+            GgmlDType::Mxfp4 => deq::<crate::quantized::BlockMxfp4>(&buffer, block_len, &mut out),
         }
 
         self.device
@@ -898,7 +905,7 @@ impl QCudaStorage {
         // f32 on the CPU and does a plain f32 matmul. The weight stays quantized in
         // memory; only the active weight is materialized as a transient f32 buffer per
         // call. Must run before the optimized paths below.
-        if is_iquant(self.dtype) {
+        if is_dequant_only(self.dtype) {
             return self.dequantize_matmul(self_shape, storage, layout);
         }
 
@@ -1007,7 +1014,8 @@ impl QCudaStorage {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
         }
 
-        let out = if is_iquant(self.dtype) || FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed)
+        let out = if is_dequant_only(self.dtype)
+            || FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed)
         {
             // CPU dequant -> f32 -> plain matmul. Required for i-quants (no q8_1 kernel);
             // also the FORCE_DMMV escape hatch for the other dtypes.

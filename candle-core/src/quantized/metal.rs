@@ -135,6 +135,10 @@ impl QMetalStorage {
                 let vec: Vec<crate::quantized::BlockIQ1M> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockIQ1M::to_float(&vec, &mut out);
             }
+            GgmlDType::Mxfp4 => {
+                let vec: Vec<crate::quantized::BlockMxfp4> = read_to_vec(&buffer, block_len);
+                crate::quantized::BlockMxfp4::to_float(&vec, &mut out);
+            }
         }
 
         let buffer = self
@@ -517,13 +521,17 @@ impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
             GgmlDType::F16 => candle_metal_kernels::GgmlDType::F16,
             GgmlDType::F32 => candle_metal_kernels::GgmlDType::F32,
             GgmlDType::BF16 => candle_metal_kernels::GgmlDType::BF16,
-            // i-quant matmul is not supported on Metal (CUDA-only target).
+            // i-quant / MXFP4 matmul is not supported on Metal (CUDA-only target);
+            // both are dequant-only here.
             GgmlDType::Iq2Xxs
             | GgmlDType::Iq3Xxs
             | GgmlDType::Iq4Xs
             | GgmlDType::Iq1S
-            | GgmlDType::Iq1M => {
-                unimplemented!("i-quant matmul is not supported on the Metal backend: {value:?}")
+            | GgmlDType::Iq1M
+            | GgmlDType::Mxfp4 => {
+                unimplemented!(
+                    "i-quant / MXFP4 matmul is not supported on the Metal backend: {value:?}"
+                )
             }
         }
     }

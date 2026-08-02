@@ -1124,8 +1124,9 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         | GgmlDType::Iq3Xxs
         | GgmlDType::Iq4Xs
         | GgmlDType::Iq1S
-        | GgmlDType::Iq1M => {
-            bail!("no ggml reference matmul error for i-quant dtype {dtype:?} (dequant-only)")
+        | GgmlDType::Iq1M
+        | GgmlDType::Mxfp4 => {
+            bail!("no ggml reference matmul error for dequant-only dtype {dtype:?}")
         }
     };
     Ok(err)
@@ -1677,5 +1678,23 @@ fn bf16_lhs_matmul_matches_f32() -> Result<()> {
         let scale = y32.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
         assert!(diff / scale < 3e-2, "m={m}: rel diff {}", diff / scale);
     }
+    Ok(())
+}
+
+/// MXFP4 is dequant-only, so `QTensor::dequantize` must reproduce the CPU
+/// `to_float` output through the tensor API, at the 17-byte block stride.
+#[test]
+fn mxfp4_qtensor_dequantize_matches_to_float() -> Result<()> {
+    let dev = Device::Cpu;
+    let src = Tensor::rand(-4f32, 4f32, (4, 64), &dev)?;
+    let qt = quantized::QTensor::quantize(&src, GgmlDType::Mxfp4)?;
+    assert_eq!(qt.storage_size_in_bytes(), 4 * 2 * 17);
+
+    let dst = qt.dequantize(&dev)?.flatten_all()?.to_vec1::<f32>()?;
+    let mut blocks = vec![k_quants::BlockMxfp4::zeros(); 4 * 2];
+    k_quants::BlockMxfp4::from_float(&src.flatten_all()?.to_vec1::<f32>()?, &mut blocks);
+    let mut expected = vec![0f32; 4 * 64];
+    k_quants::BlockMxfp4::to_float(&blocks, &mut expected);
+    assert_eq!(dst, expected);
     Ok(())
 }

@@ -1946,6 +1946,60 @@ static __device__ void dequantize_block_iq4_xs(const void * __restrict__ vx, dst
 
 #endif // QK_K == 256
 
+//================================== MXFP4 (OCP microscaling FP4)
+// Port of `dequantize_row_mxfp4` (ggml-quants.c); the CPU implementation in
+// candle-core/src/quantized/k_quants.rs is the reference. Blocks are 32 weights
+// wide, so this is independent of QK_K.
+
+#define QK_MXFP4 32
+typedef struct {
+    uint8_t e;                  // E8M0 block scale
+    uint8_t qs[QK_MXFP4 / 2];   // packed E2M1 codes, low nibble first
+} block_mxfp4;
+static_assert(sizeof(block_mxfp4) == sizeof(uint8_t) + QK_MXFP4 / 2, "wrong mxfp4 block size/padding");
+
+// `kvalues_fp4` (ggml-common.h): the E2M1 code points at twice their nominal
+// value, paired with the halved scale below.
+static __device__ __constant__ const int8_t kvalues_mxfp4_gpu[16] = {
+    0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
+};
+
+// `ggml_e8m0_to_fp32_half` (ggml-impl.h): 2^(e-127)/2. e < 2 lands in the
+// subnormal range (0x00200000 is 2^-128), otherwise e-1 is the exponent field.
+static __device__ __forceinline__ float e8m0_to_fp32_half(const uint8_t e) {
+    const uint32_t bits = e < 2 ? 0x00200000u << e : ((uint32_t) (e - 1)) << 23;
+    return __uint_as_float(bits);
+}
+
+// Mirrors dequantize_block_q4_0: 32 threads cover eight 32-weight blocks, each
+// thread expanding 4 low nibbles and the 4 high nibbles 16 weights later.
+template<typename dst_t>
+static __device__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb32) {
+
+    const int64_t i = blockIdx.x;
+
+    // assume 32 threads
+    const int tid = threadIdx.x;
+    const int il  = tid/8;
+    const int ir  = tid%8;
+    const int64_t ib = 8*i + ir;
+    if (ib >= nb32) {
+        return;
+    }
+
+    dst_t * y = yy + 256*i + 32*ir + 4*il;
+
+    const block_mxfp4 * x = (const block_mxfp4 *)vx + ib;
+    const float d = e8m0_to_fp32_half(x->e);
+
+    const uint8_t * q = x->qs + 4*il;
+
+    for (int l = 0; l < 4; ++l) {
+        y[l+ 0] = (dst_t)(d * (float)kvalues_mxfp4_gpu[q[l] & 0xF]);
+        y[l+16] = (dst_t)(d * (float)kvalues_mxfp4_gpu[q[l] >>  4]);
+    }
+}
+
 #define DEQUANTIZE_K(QNAME) \
 extern "C" __global__ void dequantize_block_##QNAME##_f32(const void * __restrict__ vx, float * __restrict__ y) { \
   dequantize_block_##QNAME(vx, y); \
@@ -1979,6 +2033,7 @@ DEQUANTIZE(q4_1)
 DEQUANTIZE(q5_0)
 DEQUANTIZE(q5_1)
 DEQUANTIZE(q8_0)
+DEQUANTIZE(mxfp4)
 
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel>
 static __device__ void get_rows_q(

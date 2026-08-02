@@ -27,6 +27,7 @@ pub const QK5_0: usize = 32;
 pub const QK5_1: usize = 32;
 pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
+pub const QK_MXFP4: usize = 32;
 
 pub trait GgmlType: Sized + Clone + Send + Sync {
     const DTYPE: GgmlDType;
@@ -3107,6 +3108,122 @@ impl GgmlType for BlockIQ1M {
     }
 }
 
+// ---------------------------------------------------------------------------
+// MXFP4 (OCP microscaling FP4): 32 weights per block sharing one E8M0 scale
+// byte, followed by 16 bytes of packed E2M1 (FP4) codes. Quantization-aware
+// trained models store weights natively in this format, so their GGUFs carry
+// MXFP4 tensors at every quant level rather than only at 4-bit.
+//
+// Dequant-only, like the i-quants above: there is no q8_1 mat-mul kernel wired
+// for MXFP4 yet, so inference runs through dequantize + matmul.
+// ---------------------------------------------------------------------------
+
+/// `kvalues_fp4` (ggml-common.h): the 16 E2M1 code points, tabulated at twice
+/// their nominal value so the codebook stays integral. The block scale is
+/// halved to compensate — see [`e8m0_to_f32_half`].
+const KVALUES_MXFP4: [i8; 16] = [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
+
+/// `ggml_e8m0_to_fp32_half` (ggml-impl.h): decode an E8M0 exponent byte to
+/// `2^(e - 127) / 2`, the halved scale that pairs with [`KVALUES_MXFP4`].
+/// NaN (`e == 0xff`) is not represented — ggml does not encode it either.
+fn e8m0_to_f32_half(e: u8) -> f32 {
+    let bits = if e < 2 {
+        // Subnormal: 0x0020_0000 is 2^-128, 0x0040_0000 is 2^-127.
+        0x0020_0000u32 << e
+    } else {
+        // 0.5 * 2^(e - 127) == 2^(e - 128), i.e. a normal with exponent field e - 1.
+        u32::from(e - 1) << 23
+    };
+    f32::from_bits(bits)
+}
+
+/// Nearest MXFP4 code for `x` under block scale `d` — `best_index_mxfp4`
+/// (ggml-quants.c). Ties go to the lower index, matching ggml's strict `<`.
+fn best_index_mxfp4(x: f32, d: f32) -> u8 {
+    let mut best_index = 0usize;
+    let mut best_err = (f32::from(KVALUES_MXFP4[0]) * d - x).abs();
+    for (i, &v) in KVALUES_MXFP4.iter().enumerate().skip(1) {
+        let err = (f32::from(v) * d - x).abs();
+        if err < best_err {
+            best_index = i;
+            best_err = err;
+        }
+    }
+    // The codebook has 16 entries, so the index always fits in a nibble.
+    best_index as u8
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockMxfp4 {
+    pub(crate) e: u8,
+    pub(crate) qs: [u8; QK_MXFP4 / 2],
+}
+const _: () = assert!(std::mem::size_of::<BlockMxfp4>() == 17);
+
+impl GgmlType for BlockMxfp4 {
+    const DTYPE: GgmlDType = GgmlDType::Mxfp4;
+    const BLCK_SIZE: usize = QK_MXFP4;
+    type VecDotType = BlockQ8_0;
+
+    // Port of `dequantize_row_mxfp4` (ggml-quants.c). Each byte packs two codes:
+    // the low nibble feeds the first half of the block, the high nibble the second.
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        let half = QK_MXFP4 / 2;
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = e8m0_to_f32_half(block.e);
+            for (j, &q) in block.qs.iter().enumerate() {
+                y[j] = d * f32::from(KVALUES_MXFP4[(q & 0x0f) as usize]);
+                y[j + half] = d * f32::from(KVALUES_MXFP4[(q >> 4) as usize]);
+            }
+        }
+    }
+
+    // Port of `quantize_row_mxfp4_ref` (ggml-quants.c).
+    fn from_float(xs: &[f32], ys: &mut [Self]) {
+        let qk = Self::BLCK_SIZE;
+        let half = qk / 2;
+        let k = xs.len();
+        debug_assert!(k.is_multiple_of(qk), "{k} is not divisible by {qk}");
+        debug_assert_eq!(
+            ys.len(),
+            k / qk,
+            "size mismatch {} {} {qk}",
+            xs.len(),
+            ys.len(),
+        );
+
+        for (block, x) in ys.iter_mut().zip(xs.chunks_exact(qk)) {
+            let amax = x.iter().fold(0f32, |acc, v| acc.max(v.abs()));
+            // Exponent chosen so amax lands in the codebook's top bucket (max
+            // code 12 == 6 * 2, hence the -2 on the log2 before the 127 bias).
+            // A zeroed block keeps e = 0, whose scale multiplies the all-zero
+            // codes to zero anyway.
+            let e = if amax > 0.0 {
+                let exp = amax.log2().floor() - 2.0 + 127.0;
+                // Saturate rather than wrap: a subnormal-scale input could
+                // otherwise push the exponent outside the E8M0 range.
+                exp.clamp(0.0, 255.0) as u8
+            } else {
+                0
+            };
+            let d = e8m0_to_f32_half(e);
+            block.e = e;
+            for (j, q) in block.qs.iter_mut().enumerate() {
+                *q = best_index_mxfp4(x[j], d) | (best_index_mxfp4(x[j + half], d) << 4);
+            }
+        }
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
 macro_rules! verify_block_size {
     ( $block_type:ident ) => {
         const _: () =
@@ -3140,7 +3257,125 @@ verify_block_sizes!(
     BlockIQ4XS,
     BlockIQ1S,
     BlockIQ1M,
+    BlockMxfp4,
     f32,
     f16,
     bf16
 );
+
+#[cfg(test)]
+mod mxfp4_tests {
+    use super::{BlockMxfp4, GgmlType, QK_MXFP4};
+
+    /// The nominal E2M1 code points. `KVALUES_MXFP4` tabulates twice these, and
+    /// the E8M0 scale is halved to compensate, so `e = 127` (scale 0.5) must
+    /// reproduce them exactly.
+    const NOMINAL: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+
+    #[test]
+    fn dequantizes_to_the_e2m1_code_points() {
+        let mut block = BlockMxfp4::zeros();
+        block.e = 127;
+        // Low nibbles walk codes 0..=7, high nibbles the negated half 8..=15.
+        for (j, q) in block.qs.iter_mut().enumerate() {
+            let code = (j % 8) as u8;
+            *q = code | ((code | 0x8) << 4);
+        }
+
+        let mut ys = vec![0f32; QK_MXFP4];
+        BlockMxfp4::to_float(std::slice::from_ref(&block), &mut ys);
+
+        // Nibble order matters: the low nibble feeds weight j, the high nibble j+16.
+        for j in 0..QK_MXFP4 / 2 {
+            let expected = NOMINAL[j % 8];
+            assert_eq!(ys[j], expected, "low nibble at {j}");
+            assert_eq!(ys[j + QK_MXFP4 / 2], -expected, "high nibble at {j}");
+        }
+    }
+
+    /// The E8M0 scale is a pure power of two, so representable values survive a
+    /// quantize -> dequantize round trip bit-exactly.
+    #[test]
+    fn round_trips_representable_values() {
+        let xs: Vec<f32> = (0..2 * QK_MXFP4)
+            .map(|i| {
+                let nominal = NOMINAL[i % 8];
+                if i % 16 < 8 {
+                    nominal
+                } else {
+                    -nominal
+                }
+            })
+            .collect();
+
+        let mut blocks = vec![BlockMxfp4::zeros(); 2];
+        BlockMxfp4::from_float(&xs, &mut blocks);
+        let mut ys = vec![0f32; xs.len()];
+        BlockMxfp4::to_float(&blocks, &mut ys);
+
+        assert_eq!(xs, ys);
+    }
+
+    /// A zeroed block must dequantize to zeros, not to subnormal noise or NaN:
+    /// `e = 0` is the smallest E8M0 exponent and code 0 is zero in E2M1.
+    #[test]
+    fn zero_block_dequantizes_to_zeros() {
+        let mut ys = vec![f32::NAN; QK_MXFP4];
+        BlockMxfp4::to_float(std::slice::from_ref(&BlockMxfp4::zeros()), &mut ys);
+        assert!(ys.iter().all(|&y| y == 0.0), "{ys:?}");
+
+        let mut blocks = vec![BlockMxfp4::zeros(); 1];
+        BlockMxfp4::from_float(&[0f32; QK_MXFP4], &mut blocks);
+        assert_eq!(blocks[0].e, 0);
+        assert!(blocks[0].qs.iter().all(|&q| q == 0));
+    }
+
+    /// Every input magnitude picks a scale whose top code (6.0 nominal) covers
+    /// the block maximum, so the largest weight is never clipped.
+    #[test]
+    fn scale_selection_never_clips_the_block_maximum() {
+        for exp in -20i32..20 {
+            let amax = 1.7f32 * 2f32.powi(exp);
+            let mut xs = vec![0f32; QK_MXFP4];
+            xs[5] = amax;
+            xs[21] = -amax;
+
+            let mut blocks = vec![BlockMxfp4::zeros(); 1];
+            BlockMxfp4::from_float(&xs, &mut blocks);
+            let mut ys = vec![0f32; QK_MXFP4];
+            BlockMxfp4::to_float(&blocks, &mut ys);
+
+            // 6.0 is the largest code, so the reconstruction of amax must not be
+            // saturated below it: |ys| stays within one step (2.0/6 of amax).
+            let err = (ys[5] - amax).abs().max((ys[21] + amax).abs());
+            assert!(
+                err <= amax / 3.0,
+                "exp {exp}: amax {amax} reconstructed as {} / {} (err {err})",
+                ys[5],
+                ys[21]
+            );
+        }
+    }
+
+    /// E8M0 decoding: `e = 127` is the unit exponent halved, and each step is a
+    /// factor of two, including across the subnormal boundary ggml special-cases.
+    #[test]
+    fn e8m0_scale_decodes_as_a_power_of_two_ladder() {
+        assert_eq!(super::e8m0_to_f32_half(127), 0.5);
+        assert_eq!(super::e8m0_to_f32_half(128), 1.0);
+        assert_eq!(super::e8m0_to_f32_half(126), 0.25);
+        // 2^-128 and 2^-127 are subnormal in f32 (and `powi` underflows there),
+        // so compare the bit patterns ggml hard-codes for them.
+        assert_eq!(super::e8m0_to_f32_half(0), f32::from_bits(0x0020_0000));
+        assert_eq!(super::e8m0_to_f32_half(1), f32::from_bits(0x0040_0000));
+        // e = 2 is the first normal: 2^-126 == f32::MIN_POSITIVE.
+        assert_eq!(super::e8m0_to_f32_half(2), f32::MIN_POSITIVE);
+        for e in 2u8..=254 {
+            assert_eq!(
+                super::e8m0_to_f32_half(e + 1),
+                super::e8m0_to_f32_half(e) * 2.0,
+                "e = {e}"
+            );
+        }
+    }
+}
