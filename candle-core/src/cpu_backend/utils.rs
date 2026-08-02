@@ -1,5 +1,6 @@
 /// Helper functions to write CPU kernels.
 use crate::backend::BackendStorage;
+use crate::nditer::NdIter;
 use crate::{Error, Layout, Result, WithDType};
 
 type C = super::CpuStorage;
@@ -137,188 +138,84 @@ pub fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
     rhs: &[T],
     mut f: F,
 ) -> Vec<U> {
-    match (lhs_l.contiguous_offsets(), rhs_l.contiguous_offsets()) {
-        (Some((o_l1, o_l2)), Some((o_r1, o_r2))) => lhs[o_l1..o_l2]
-            .iter()
-            .zip(rhs[o_r1..o_r2].iter())
-            .map(|(&l, &r)| f(l, r))
-            .collect(),
-        (Some((o_l1, o_l2)), None) => {
-            // TODO: Maybe we want to avoid going through the layout twice.
-            match rhs_l.offsets_b() {
-                Some(ob) => {
-                    let mut i_in_block = 0;
-                    let mut i_right_broadcast = 0;
-                    lhs[o_l1..o_l2]
-                        .iter()
-                        .map(|&l| {
-                            let r = unsafe { rhs.get_unchecked(i_in_block + ob.start) };
-                            i_right_broadcast += 1;
-                            if i_right_broadcast >= ob.right_broadcast {
-                                i_in_block += 1;
-                                i_right_broadcast = 0;
-                            }
-                            if i_in_block >= ob.len {
-                                i_in_block = 0
-                            }
-                            f(l, *r)
-                        })
-                        .collect()
-                }
-                None => lhs_l
-                    .strided_index()
-                    .zip(rhs_l.strided_index())
-                    .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                    .collect(),
-            }
+    let el_count = lhs_l.shape().elem_count();
+    let mut result: Vec<U> = Vec::with_capacity(el_count);
+
+    let nd_iter = NdIter::new([lhs_l, rhs_l]);
+    let inner_size = nd_iter.inner_size;
+    let [inner_ls, inner_rs] = nd_iter.inner_strides;
+
+    for [lhs_off, rhs_off] in nd_iter {
+        for i in 0..inner_size {
+            result.push(f(lhs[lhs_off + i * inner_ls], rhs[rhs_off + i * inner_rs]));
         }
-        (None, Some((o_r1, o_r2))) => {
-            // TODO: Maybe we want to avoid going through the layout twice.
-            match lhs_l.offsets_b() {
-                Some(ob) => {
-                    let mut i_in_block = 0;
-                    let mut i_right_broadcast = 0;
-                    rhs[o_r1..o_r2]
-                        .iter()
-                        .map(|&r| {
-                            let l = unsafe { lhs.get_unchecked(i_in_block + ob.start) };
-                            i_right_broadcast += 1;
-                            if i_right_broadcast >= ob.right_broadcast {
-                                i_in_block += 1;
-                                i_right_broadcast = 0;
-                            }
-                            if i_in_block >= ob.len {
-                                i_in_block = 0
-                            }
-                            f(*l, r)
-                        })
-                        .collect()
-                }
-                None => lhs_l
-                    .strided_index()
-                    .zip(rhs_l.strided_index())
-                    .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                    .collect(),
-            }
-        }
-        _ => lhs_l
-            .strided_index()
-            .zip(rhs_l.strided_index())
-            .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-            .collect(),
     }
+
+    result
 }
 
 // Similar to binary_map but with vectorized variants.
-pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>(
+pub fn binary_map_vec<
+    T: Copy,
+    F: FnMut(T, T) -> T,
+    FV: FnMut(&[T], &[T], &mut [T]),
+    FSV: FnMut(T, &[T], &mut [T]),
+>(
     lhs_l: &Layout,
     rhs_l: &Layout,
     lhs: &[T],
     rhs: &[T],
     mut f: F,
     mut f_vec: FV,
+    mut f_scalar_vec: FSV,
 ) -> Vec<T> {
     let el_count = lhs_l.shape().elem_count();
-    match (lhs_l.contiguous_offsets(), rhs_l.contiguous_offsets()) {
-        (Some((o_l1, o_l2)), Some((o_r1, o_r2))) => {
-            let mut ys: Vec<T> = Vec::with_capacity(el_count);
-            let ys_to_set = ys.spare_capacity_mut();
-            let ys_to_set = unsafe {
-                std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(ys_to_set)
-            };
-            f_vec(&lhs[o_l1..o_l2], &rhs[o_r1..o_r2], ys_to_set);
-            // SAFETY: values are all set by f_vec.
-            unsafe { ys.set_len(el_count) };
-            ys
+    let mut ys: Vec<T> = Vec::with_capacity(el_count);
+    let ys_to_set = unsafe {
+        let s = ys.spare_capacity_mut();
+        std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(s)
+    };
+
+    let nd_iter = NdIter::new([lhs_l, rhs_l]);
+    let inner_size = nd_iter.inner_size;
+    let [inner_ls, inner_rs] = nd_iter.inner_strides;
+
+    let mut dst_off = 0usize;
+
+    for [lhs_off, rhs_off] in nd_iter {
+        match (inner_ls, inner_rs) {
+            (1, 1) => f_vec(
+                &lhs[lhs_off..lhs_off + inner_size],
+                &rhs[rhs_off..rhs_off + inner_size],
+                &mut ys_to_set[dst_off..dst_off + inner_size],
+            ),
+            (1, 0) => {
+                let r = rhs[rhs_off];
+                f_scalar_vec(
+                    r,
+                    &lhs[lhs_off..lhs_off + inner_size],
+                    &mut ys_to_set[dst_off..dst_off + inner_size],
+                );
+            }
+            (0, 1) => {
+                let l = lhs[lhs_off];
+                for i in 0..inner_size {
+                    ys_to_set[dst_off + i] = f(l, rhs[rhs_off + i]);
+                }
+            }
+            _ => {
+                for i in 0..inner_size {
+                    ys_to_set[dst_off + i] =
+                        f(lhs[lhs_off + i * inner_ls], rhs[rhs_off + i * inner_rs]);
+                }
+            }
         }
-        (Some((o_l1, o_l2)), None) => match rhs_l.offsets_b() {
-            Some(ob) if ob.right_broadcast == 1 => {
-                let rhs = &rhs[ob.start..ob.start + ob.len];
-                let mut ys: Vec<T> = Vec::with_capacity(el_count);
-                let ys_to_set = ys.spare_capacity_mut();
-                let ys_to_set = unsafe {
-                    std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(ys_to_set)
-                };
-                let mut dst_i = 0;
-                for src_i in (o_l1..o_l2).step_by(ob.len) {
-                    f_vec(
-                        &lhs[src_i..src_i + ob.len],
-                        rhs,
-                        &mut ys_to_set[dst_i..dst_i + ob.len],
-                    );
-                    dst_i += ob.len;
-                }
-                // SAFETY: values are all set by f_vec.
-                unsafe { ys.set_len(el_count) };
-                ys
-            }
-            Some(ob) => {
-                let rhs = &rhs[ob.start..ob.start + ob.len];
-                let mut ys = lhs[o_l1..o_l2].to_vec();
-                for idx_l in 0..ob.left_broadcast {
-                    let start = idx_l * ob.len * ob.right_broadcast;
-                    for (i, &r) in rhs.iter().enumerate() {
-                        let start = start + i * ob.right_broadcast;
-                        for v in ys[start..start + ob.right_broadcast].iter_mut() {
-                            *v = f(*v, r)
-                        }
-                    }
-                }
-                ys
-            }
-            None => lhs_l
-                .strided_index()
-                .zip(rhs_l.strided_index())
-                .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                .collect(),
-        },
-        (None, Some((o_r1, o_r2))) => match lhs_l.offsets_b() {
-            Some(ob) if ob.right_broadcast == 1 => {
-                let lhs = &lhs[ob.start..ob.start + ob.len];
-                let mut ys: Vec<T> = Vec::with_capacity(el_count);
-                let ys_to_set = ys.spare_capacity_mut();
-                let ys_to_set = unsafe {
-                    std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(ys_to_set)
-                };
-                let mut dst_i = 0;
-                for src_i in (o_r1..o_r2).step_by(ob.len) {
-                    f_vec(
-                        lhs,
-                        &rhs[src_i..src_i + ob.len],
-                        &mut ys_to_set[dst_i..dst_i + ob.len],
-                    );
-                    dst_i += ob.len;
-                }
-                // SAFETY: values are all set by f_vec.
-                unsafe { ys.set_len(el_count) };
-                ys
-            }
-            Some(ob) => {
-                let lhs = &lhs[ob.start..ob.start + ob.len];
-                let mut ys = rhs[o_r1..o_r2].to_vec();
-                for idx_l in 0..ob.left_broadcast {
-                    let start = idx_l * ob.len * ob.right_broadcast;
-                    for (i, &l) in lhs.iter().enumerate() {
-                        let start = start + i * ob.right_broadcast;
-                        for v in ys[start..start + ob.right_broadcast].iter_mut() {
-                            *v = f(l, *v)
-                        }
-                    }
-                }
-                ys
-            }
-            None => lhs_l
-                .strided_index()
-                .zip(rhs_l.strided_index())
-                .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                .collect(),
-        },
-        _ => lhs_l
-            .strided_index()
-            .zip(rhs_l.strided_index())
-            .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-            .collect(),
+        dst_off += inner_size;
     }
+
+    // SAFETY: all el_count elements have been written in the dispatch loop above.
+    unsafe { ys.set_len(el_count) };
+    ys
 }
 
 pub fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
@@ -332,6 +229,29 @@ pub fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
             .iter()
             .map(|&v| f(v))
             .collect(),
+        crate::StridedBlocks::UniformBlocks {
+            start_offset,
+            block_len,
+            count,
+            src_stride,
+        } => {
+            let mut result = Vec::with_capacity(count * block_len);
+            if block_len == 1 {
+                for i in 0..count {
+                    let v = unsafe { vs.get_unchecked(start_offset + i * src_stride) };
+                    result.push(f(*v))
+                }
+            } else {
+                for i in 0..count {
+                    let src_start = start_offset + i * src_stride;
+                    for offset in 0..block_len {
+                        let v = unsafe { vs.get_unchecked(src_start + offset) };
+                        result.push(f(*v))
+                    }
+                }
+            }
+            result
+        }
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len,
@@ -374,6 +294,40 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
             unsafe { ys.set_len(len) };
             ys
         }
+        crate::StridedBlocks::UniformBlocks {
+            start_offset,
+            block_len,
+            count,
+            src_stride,
+        } => {
+            let el_count = count * block_len;
+            if block_len == 1 {
+                let mut result = Vec::with_capacity(count);
+                for i in 0..count {
+                    let v = unsafe { vs.get_unchecked(start_offset + i * src_stride) };
+                    result.push(f(*v))
+                }
+                result
+            } else {
+                let mut ys: Vec<U> = Vec::with_capacity(el_count);
+                let ys_to_set = ys.spare_capacity_mut();
+                let ys_to_set = unsafe {
+                    std::mem::transmute::<&mut [std::mem::MaybeUninit<U>], &mut [U]>(ys_to_set)
+                };
+                let mut dst_index = 0;
+                for i in 0..count {
+                    let src_start = start_offset + i * src_stride;
+                    f_vec(
+                        &vs[src_start..src_start + block_len],
+                        &mut ys_to_set[dst_index..dst_index + block_len],
+                    );
+                    dst_index += block_len;
+                }
+                // SAFETY: values are all set by f_vec.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
+        }
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len,
@@ -406,4 +360,92 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
             }
         }
     }
+}
+
+// Below this many contiguous elements the barrier-pool split costs more than it saves.
+const PAR_ELEMWISE_MIN: usize = 64 * 1024;
+// Per-unit span: big enough to amortize dispatch, small enough to balance.
+const PAR_ELEMWISE_CHUNK: usize = 16 * 1024;
+
+pub fn unary_map_vec_par<
+    T: Copy + Send + Sync,
+    U: Copy + Send + Sync,
+    F: Fn(T) -> U + Sync,
+    FV: Fn(&[T], &mut [U]) + Sync,
+>(
+    vs: &[T],
+    layout: &Layout,
+    f: F,
+    f_vec: FV,
+) -> Vec<U> {
+    if let crate::StridedBlocks::SingleBlock { start_offset, len } = layout.strided_blocks() {
+        if len >= PAR_ELEMWISE_MIN {
+            let src = &vs[start_offset..start_offset + len];
+            let mut ys: Vec<U> = Vec::with_capacity(len);
+            let ys_ptr = ys.as_mut_ptr() as usize;
+            let n_units = len.div_ceil(PAR_ELEMWISE_CHUNK);
+            crate::utils::barrier_pool().execute_chunked(n_units, |range| {
+                let ys_ptr = ys_ptr as *mut U;
+                for unit in range {
+                    let lo = unit * PAR_ELEMWISE_CHUNK;
+                    let hi = len.min(lo + PAR_ELEMWISE_CHUNK);
+                    let dst = unsafe { std::slice::from_raw_parts_mut(ys_ptr.add(lo), hi - lo) };
+                    f_vec(&src[lo..hi], dst);
+                }
+            });
+            // SAFETY: every element is written by exactly one unit.
+            unsafe { ys.set_len(len) };
+            return ys;
+        }
+    }
+    unary_map_vec(vs, layout, f, f_vec)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn binary_map_vec_par<
+    T: Copy + Send + Sync,
+    F: Fn(T, T) -> T + Sync,
+    FV: Fn(&[T], &[T], &mut [T]) + Sync,
+    FSV: FnMut(T, &[T], &mut [T]),
+>(
+    lhs_l: &Layout,
+    rhs_l: &Layout,
+    lhs: &[T],
+    rhs: &[T],
+    f: F,
+    f_vec: FV,
+    f_scalar_vec: FSV,
+) -> Vec<T> {
+    if let (
+        crate::StridedBlocks::SingleBlock {
+            start_offset: lo_l,
+            len: len_l,
+        },
+        crate::StridedBlocks::SingleBlock {
+            start_offset: lo_r,
+            len: len_r,
+        },
+    ) = (lhs_l.strided_blocks(), rhs_l.strided_blocks())
+    {
+        if len_l == len_r && len_l >= PAR_ELEMWISE_MIN {
+            let a = &lhs[lo_l..lo_l + len_l];
+            let b = &rhs[lo_r..lo_r + len_r];
+            let mut ys: Vec<T> = Vec::with_capacity(len_l);
+            let ys_ptr = ys.as_mut_ptr() as usize;
+            let n_units = len_l.div_ceil(PAR_ELEMWISE_CHUNK);
+            crate::utils::barrier_pool().execute_chunked(n_units, |range| {
+                let ys_ptr = ys_ptr as *mut T;
+                for unit in range {
+                    let lo = unit * PAR_ELEMWISE_CHUNK;
+                    let hi = len_l.min(lo + PAR_ELEMWISE_CHUNK);
+                    let dst = unsafe { std::slice::from_raw_parts_mut(ys_ptr.add(lo), hi - lo) };
+                    f_vec(&a[lo..hi], &b[lo..hi], dst);
+                }
+            });
+            // SAFETY: every element is written by exactly one unit.
+            unsafe { ys.set_len(len_l) };
+            return ys;
+        }
+    }
+    binary_map_vec(lhs_l, rhs_l, lhs, rhs, f, f_vec, f_scalar_vec)
 }
