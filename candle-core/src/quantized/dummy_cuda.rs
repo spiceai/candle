@@ -28,6 +28,10 @@ impl QCudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub fn dequantize_rows(&self, _rows: &[u32], _row_elems: usize) -> Result<CudaStorage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub fn quantize(&mut self, _src: &CudaStorage) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }

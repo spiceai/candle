@@ -117,24 +117,6 @@ fn quantize_q8_1(
     Ok(())
 }
 
-/// Expand `elem_count` elements to f32, starting `byte_offset` into `data`.
-///
-/// The offset lets a caller dequantize one slice of a larger quantized buffer -- an MoE
-/// weight holds every expert, but a token routes to only a few of them, so expanding all
-/// of them costs `expert_count / expert_used_count` times more traffic than the model
-/// actually needs.
-fn dequantize_f32_offset(
-    data: &PaddedCudaSlice,
-    dtype: GgmlDType,
-    byte_offset: usize,
-    elem_count: usize,
-    dev: &CudaDevice,
-) -> Result<CudaStorage> {
-    let mut dst = unsafe { dev.alloc::<f32>(elem_count)? };
-    dequantize_f32_into(data, dtype, byte_offset, elem_count, &mut dst, 0, dev)?;
-    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
-}
-
 /// Expand `elem_count` elements from `byte_offset` into `dst` at `dst_elem_offset`.
 #[allow(clippy::too_many_arguments)]
 fn dequantize_f32_into(
@@ -217,7 +199,9 @@ fn dequantize_f32(
     elem_count: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    dequantize_f32_offset(data, dtype, 0, elem_count, dev)
+    let mut dst = unsafe { dev.alloc::<f32>(elem_count)? };
+    dequantize_f32_into(data, dtype, 0, elem_count, &mut dst, 0, dev)?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
 /// Expand the named leading-dimension rows into ONE contiguous f32 buffer.
@@ -262,11 +246,9 @@ fn dequantize_f32_rows(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
-/// f16 counterpart of [`dequantize_f32_offset`].
-fn dequantize_f16_offset(
+fn dequantize_f16(
     data: &PaddedCudaSlice,
     dtype: GgmlDType,
-    byte_offset: usize,
     elem_count: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
@@ -313,10 +295,9 @@ fn dequantize_f16_offset(
         shared_mem_bytes: 0,
     };
 
-    let src = data.inner.slice(byte_offset..);
     if is_k {
         let mut builder = func.builder();
-        builder.arg(&src);
+        builder.arg(&data.inner);
         builder.arg(&dst);
         unsafe { builder.launch(cfg) }.w()?;
     } else {
@@ -325,22 +306,12 @@ fn dequantize_f16_offset(
             _ => elem_count / 32,
         };
         let mut builder = func.builder();
-        builder.arg(&src);
+        builder.arg(&data.inner);
         builder.arg(&dst);
         barg!(builder, nb32 as i32);
         unsafe { builder.launch(cfg) }.w()?;
     }
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
-}
-
-/// Whole-buffer f16 dequantize: the offset form starting at zero.
-fn dequantize_f16(
-    data: &PaddedCudaSlice,
-    dtype: GgmlDType,
-    elem_count: usize,
-    dev: &CudaDevice,
-) -> Result<CudaStorage> {
-    dequantize_f16_offset(data, dtype, 0, elem_count, dev)
 }
 
 fn get_rows(
@@ -843,60 +814,6 @@ impl QCudaStorage {
     /// Expand the named rows into one contiguous buffer, with no concatenation.
     pub fn dequantize_rows(&self, rows: &[u32], row_elems: usize) -> Result<CudaStorage> {
         dequantize_f32_rows(&self.data, self.dtype, rows, row_elems, self.device())
-    }
-
-    /// f16 form of [`Self::dequantize_range`]. Half the bytes of the f32 form, which for a
-    /// gathered MoE weight is the tensor the matmul then streams.
-    pub fn dequantize_range_f16(
-        &self,
-        elem_offset: usize,
-        elem_count: usize,
-    ) -> Result<CudaStorage> {
-        let block_size = self.dtype.block_size();
-        if elem_offset % block_size != 0 || elem_count % block_size != 0 {
-            crate::bail!(
-                "dequantize_range_f16 offset {elem_offset} and count {elem_count} must both be \
-                 multiples of the {:?} block size {block_size}",
-                self.dtype
-            )
-        }
-        let byte_offset = (elem_offset / block_size) * self.dtype.type_size();
-        dequantize_f16_offset(
-            &self.data,
-            self.dtype,
-            byte_offset,
-            elem_count,
-            self.device(),
-        )
-    }
-
-    /// Dequantize `elem_count` elements starting at `elem_offset`, without touching the
-    /// rest of the buffer. Both bounds must land on block boundaries, since a quantized
-    /// block is the smallest addressable unit.
-    pub fn dequantize_range(&self, elem_offset: usize, elem_count: usize) -> Result<CudaStorage> {
-        let block_size = self.dtype.block_size();
-        if elem_offset % block_size != 0 || elem_count % block_size != 0 {
-            crate::bail!(
-                "dequantize_range offset {elem_offset} and count {elem_count} must both be \
-                 multiples of the {:?} block size {block_size}",
-                self.dtype
-            )
-        }
-        let byte_offset = (elem_offset / block_size) * self.dtype.type_size();
-        let end = byte_offset + (elem_count / block_size) * self.dtype.type_size();
-        if end > self.data.len {
-            crate::bail!(
-                "dequantize_range reads {end} bytes from a {} byte buffer",
-                self.data.len
-            )
-        }
-        dequantize_f32_offset(
-            &self.data,
-            self.dtype,
-            byte_offset,
-            elem_count,
-            self.device(),
-        )
     }
 
     pub fn quantize(&mut self, src: &CudaStorage) -> Result<()> {
