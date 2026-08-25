@@ -255,6 +255,27 @@ impl QStorage {
         }
     }
 
+    /// Dequantize one slice of the buffer. `None` where the backend has no offset-aware
+    /// kernel, which tells the caller to expand everything and narrow afterwards.
+    fn dequantize_range(
+        &self,
+        elem_offset: usize,
+        elem_count: usize,
+        f16: bool,
+    ) -> Result<Option<Storage>> {
+        match self {
+            QStorage::Cuda(storage) => {
+                let s = if f16 {
+                    storage.dequantize_range_f16(elem_offset, elem_count)?
+                } else {
+                    storage.dequantize_range(elem_offset, elem_count)?
+                };
+                Ok(Some(Storage::Cuda(s)))
+            }
+            QStorage::Cpu(_) | QStorage::Metal(_) => Ok(None),
+        }
+    }
+
     fn data(&self) -> Result<Cow<'_, [u8]>> {
         match self {
             QStorage::Cpu(storage) => {
@@ -768,6 +789,66 @@ impl QTensor {
         let storage = self.storage.dequantize(self.shape.elem_count())?;
         let none = crate::op::BackpropOp::none();
         crate::tensor::from_storage(storage, self.shape.clone(), none, false).to_device(device)
+    }
+
+    /// Dequantize only the rows named by `rows`, returning `[rows.len(), ..]`.
+    ///
+    /// An MoE expert weight is `[expert_count, n, k]`, but a token is routed to only
+    /// `expert_used_count` of those experts -- 8 of 256 for GLM, so expanding the whole
+    /// tensor moves 32x the data the model reads. Rows are expanded individually and
+    /// concatenated, so the traffic scales with the routing rather than the expert count.
+    ///
+    /// Duplicate entries in `rows` are expanded once each, so a caller that wants the
+    /// compact form should deduplicate first.
+    pub fn dequantize_rows(&self, rows: &[u32], device: &Device) -> Result<Tensor> {
+        self.dequantize_rows_dtype(rows, device, false)
+    }
+
+    /// [`Self::dequantize_rows`] in f16. Half the bytes, which matters because the matmul
+    /// that follows streams this tensor, and an f16 operand can reach the tensor cores an
+    /// f32 one cannot.
+    pub fn dequantize_rows_f16(&self, rows: &[u32], device: &Device) -> Result<Tensor> {
+        self.dequantize_rows_dtype(rows, device, true)
+    }
+
+    fn dequantize_rows_dtype(&self, rows: &[u32], device: &Device, f16: bool) -> Result<Tensor> {
+        let dims = self.shape.dims();
+        if dims.is_empty() {
+            crate::bail!("dequantize_rows needs a tensor of rank 1 or more")
+        }
+        let row_count = dims[0];
+        let row_elems: usize = dims[1..].iter().product();
+        for &row in rows {
+            if row as usize >= row_count {
+                crate::bail!("dequantize_rows row {row} is out of range for {row_count} rows")
+            }
+        }
+
+        let mut out_shape = vec![rows.len()];
+        out_shape.extend_from_slice(&dims[1..]);
+
+        // The CUDA path writes every row straight into one buffer. Expanding rows into
+        // separate tensors and concatenating costs a full copy of the result, and for a
+        // gathered MoE weight that copy is the largest tensor in the call.
+        let aligned = row_elems % self.dtype().block_size() == 0;
+        match (&self.storage, aligned, f16) {
+            (QStorage::Cuda(storage), true, false) => {
+                let storage = Storage::Cuda(storage.dequantize_rows(rows, row_elems)?);
+                let none = crate::op::BackpropOp::none();
+                crate::tensor::from_storage(storage, Shape::from(out_shape), none, false)
+                    .to_device(device)
+            }
+            _ => {
+                // No in-place path here: expand everything once and select.
+                let all = if f16 {
+                    self.dequantize_f16(device)?
+                } else {
+                    self.dequantize(device)?
+                };
+                let idx = Tensor::from_slice(rows, (rows.len(),), device)?;
+                all.index_select(&idx, 0)
+            }
+        }
     }
 
     pub fn dequantize_f16(&self, device: &Device) -> Result<Tensor> {
