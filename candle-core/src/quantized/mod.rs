@@ -770,6 +770,51 @@ impl QTensor {
         crate::tensor::from_storage(storage, self.shape.clone(), none, false).to_device(device)
     }
 
+    /// Dequantize only the rows named by `rows`, returning `[rows.len(), ..]`.
+    ///
+    /// An MoE expert weight is `[expert_count, n, k]`, but a token is routed to only
+    /// `expert_used_count` of those experts -- 8 of 256 for GLM, so expanding the whole
+    /// tensor moves 32x the data the model reads. Rows are expanded individually and
+    /// concatenated, so the traffic scales with the routing rather than the expert count.
+    ///
+    /// Duplicate entries in `rows` are expanded once each, so a caller that wants the
+    /// compact form should deduplicate first.
+    pub fn dequantize_rows(&self, rows: &[u32], device: &Device) -> Result<Tensor> {
+        let dims = self.shape.dims();
+        if dims.is_empty() {
+            crate::bail!("dequantize_rows needs a tensor of rank 1 or more")
+        }
+        let row_count = dims[0];
+        let row_elems: usize = dims[1..].iter().product();
+        for &row in rows {
+            if row as usize >= row_count {
+                crate::bail!("dequantize_rows row {row} is out of range for {row_count} rows")
+            }
+        }
+
+        let mut out_shape = vec![rows.len()];
+        out_shape.extend_from_slice(&dims[1..]);
+
+        // The CUDA path writes every row straight into one buffer. Expanding rows into
+        // separate tensors and concatenating costs a full copy of the result, and for a
+        // gathered MoE weight that copy is the largest tensor in the call.
+        let aligned = row_elems.is_multiple_of(self.dtype().block_size());
+        match (&self.storage, aligned) {
+            (QStorage::Cuda(storage), true) => {
+                let storage = Storage::Cuda(storage.dequantize_rows(rows, row_elems)?);
+                let none = crate::op::BackpropOp::none();
+                crate::tensor::from_storage(storage, Shape::from(out_shape), none, false)
+                    .to_device(device)
+            }
+            _ => {
+                // No in-place path here: expand everything once and select.
+                let all = self.dequantize(device)?;
+                let idx = Tensor::from_slice(rows, (rows.len(),), device)?;
+                all.index_select(&idx, 0)
+            }
+        }
+    }
+
     pub fn dequantize_f16(&self, device: &Device) -> Result<Tensor> {
         // In the CUDA case, we have a specialized kernel as this can be useful for volta
         // architectures. https://github.com/huggingface/candle/issues/2136
