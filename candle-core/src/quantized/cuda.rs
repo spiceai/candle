@@ -217,7 +217,7 @@ fn dequantize_f32_rows(
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
     let block_size = dtype.block_size();
-    if row_elems % block_size != 0 {
+    if !row_elems.is_multiple_of(block_size) {
         crate::bail!(
             "dequantize_f32_rows row of {row_elems} elements is not a multiple of the \
              {dtype:?} block size {block_size}"

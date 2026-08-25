@@ -798,7 +798,7 @@ impl QTensor {
         // The CUDA path writes every row straight into one buffer. Expanding rows into
         // separate tensors and concatenating costs a full copy of the result, and for a
         // gathered MoE weight that copy is the largest tensor in the call.
-        let aligned = row_elems % self.dtype().block_size() == 0;
+        let aligned = row_elems.is_multiple_of(self.dtype().block_size());
         match (&self.storage, aligned) {
             (QStorage::Cuda(storage), true) => {
                 let storage = Storage::Cuda(storage.dequantize_rows(rows, row_elems)?);
