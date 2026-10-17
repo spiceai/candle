@@ -1,7 +1,5 @@
 mod ffi;
 
-use std::f32;
-
 use candle::backend::BackendStorage;
 use candle::cuda::cudarc;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
@@ -197,7 +195,7 @@ impl FlashAttn {
             d: head_size_q as i32,
             d_v: self.head_size_v as i32,
             scale_softmax: self.softmax_scale,
-            scale_softmax_log2: self.softmax_scale * f32::consts::LOG2_E,
+            scale_softmax_log2: self.softmax_scale * std::f32::consts::LOG2_E,
             q_ptr: (*q.device_ptr()) as *mut core::ffi::c_void,
             k_ptr: (*k_c_k_pe_cache.device_ptr()) as *mut core::ffi::c_void,
             v_ptr: (*v.device_ptr()) as *mut core::ffi::c_void,

@@ -13,15 +13,17 @@ on:
       - candle-pyo3/**
   workflow_dispatch:
 
-permissions:
-  contents: read
 
 env:
   PROTOC_VERSION: '25.0'
   FEATURES_FLAG: '--features onnx'
 
+permissions: {}
+
 jobs:
   linux:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -32,6 +34,11 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: '3.13'
+      # .cargo/config.toml sets target-cpu=native. Cross-compiling aarch64 with
+      # that flag makes rustc 1.99.1 SIGSEGV inside rayon-core.
+      - name: Drop host target-cpu for aarch64
+        if: matrix.target == 'aarch64'
+        run: rm -f .cargo/config.toml
       - name: Build wheels
         uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
@@ -47,6 +54,8 @@ jobs:
           path: ./candle-pyo3/dist
 
   windows:
+    permissions:
+      contents: read
     runs-on: windows-latest
     strategy:
       matrix:
@@ -62,6 +71,11 @@ jobs:
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # rustc 1.99.1 exits STATUS_ILLEGAL_INSTRUCTION when .cargo/config.toml
+      # sets target-cpu=native on the windows-latest runner.
+      - name: Drop host target-cpu
+        shell: bash
+        run: rm -f .cargo/config.toml
       - name: Build wheels
         uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
@@ -76,6 +90,8 @@ jobs:
           path: ./candle-pyo3/dist
 
   macos:
+    permissions:
+      contents: read
     runs-on: macos-latest
     strategy:
       matrix:
@@ -104,6 +120,8 @@ jobs:
           path: ./candle-pyo3/dist
 
   sdist:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

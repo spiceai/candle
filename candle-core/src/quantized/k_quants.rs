@@ -809,7 +809,8 @@ impl GgmlType for BlockQ8_1 {
             ys.len(),
             Self::BLCK_SIZE
         );
-        for (block, ys) in xs.iter().zip(ys.chunks_exact_mut(Self::BLCK_SIZE)) {
+        let (y_chunks, _) = ys.as_chunks_mut::<{ Self::BLCK_SIZE }>();
+        for (block, ys) in xs.iter().zip(y_chunks) {
             let d = block.d.to_f32();
             for (dst, &src) in ys.iter_mut().zip(block.qs.iter()) {
                 *dst = src as f32 * d;
@@ -967,7 +968,8 @@ impl GgmlType for BlockQ2K {
 
             let sum_x2 = x.iter().map(|x| x * x).sum::<f32>();
             let sigma2 = sum_x2 / QK_K as f32;
-            for (j, x_scale_slice) in x.chunks_exact(16).enumerate() {
+            let (x_chunks, _) = x.as_chunks::<16>();
+            for (j, x_scale_slice) in x_chunks.iter().enumerate() {
                 for (l, (w_elem, x_elem)) in weights.iter_mut().zip(x_scale_slice).enumerate() {
                     let imatrix_row = sblk_idx % (n_per_row / QK_K);
                     let imatrix_w = imatrix_weights[imatrix_row * QK_K + 16 * j + l];
@@ -1021,7 +1023,9 @@ impl GgmlType for BlockQ2K {
 
             let mut is = 0;
 
-            for (y_block, qs) in y.chunks_exact_mut(128).zip(block.qs.chunks_exact(32)) {
+            let (y_chunks, _) = y.as_chunks_mut::<128>();
+            let (qs_chunks, _) = block.qs.as_chunks::<32>();
+            for (y_block, qs) in y_chunks.iter_mut().zip(qs_chunks) {
                 // Step by 32 over q.
                 let mut shift = 0;
                 let mut y_block_index = 0;
@@ -1196,7 +1200,8 @@ impl GgmlType for BlockQ3K {
     fn from_float(xs: &[f32], ys: &mut [Self]) {
         for (block, x) in group_for_quantization(xs, ys) {
             let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
-            for (j, x_scale_slice) in x.chunks_exact(16).enumerate() {
+            let (x_chunks, _) = x.as_chunks::<16>();
+            for (j, x_scale_slice) in x_chunks.iter().enumerate() {
                 scales[j] = make_q3_quants(x_scale_slice, 4, true);
             }
 
@@ -1285,7 +1290,8 @@ impl GgmlType for BlockQ3K {
             let sum_x2 = x.iter().map(|x| x * x).sum::<f32>();
             let sigma2 = 2. * sum_x2 / QK_K as f32;
 
-            for (j, x_scale_slice) in x.chunks_exact(16).enumerate() {
+            let (x_chunks, _) = x.as_chunks::<16>();
+            for (j, x_scale_slice) in x_chunks.iter().enumerate() {
                 for (l_idx, (w_elem, x_elem)) in weights.iter_mut().zip(x_scale_slice).enumerate() {
                     let imatrix_row = sblk_idx % (n_per_row / QK_K);
                     let imatrix_w = imatrix_weights[imatrix_row * QK_K + 16 * j + l_idx];
@@ -1398,11 +1404,16 @@ impl GgmlType for BlockQ3K {
             // Dequantize both 128 long blocks
             // 32 qs values per 128 long block
             // Each 16 elements get a scale
-            for (y, qs) in y.chunks_exact_mut(128).zip(block.qs.chunks_exact(32)) {
+            let (y_chunks, _) = y.as_chunks_mut::<128>();
+            let (qs_chunks, _) = block.qs.as_chunks::<32>();
+            for (y, qs) in y_chunks.iter_mut().zip(qs_chunks) {
                 let mut shift = 0;
-                for shift_scoped_y in y.chunks_exact_mut(32) {
-                    for (scale_index, scale_scoped_y) in
-                        shift_scoped_y.chunks_exact_mut(16).enumerate()
+
+                let (scoped_y_chunks, _) = y.as_chunks_mut::<32>();
+                for shift_scoped_y in scoped_y_chunks {
+                    let (shift_scoped_chunks, _) = shift_scoped_y.as_chunks_mut::<16>();
+
+                    for (scale_index, scale_scoped_y) in shift_scoped_chunks.iter_mut().enumerate()
                     {
                         let dl = d_all * (scales[is] as f32 - 32.0);
                         for (i, inner_y) in scale_scoped_y.iter_mut().enumerate() {
@@ -1552,7 +1563,8 @@ impl GgmlType for BlockQ4K {
             let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
             let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
 
-            for (j, x_scale_slice) in x.chunks_exact(32).enumerate() {
+            let (x_chunks, _) = x.as_chunks::<32>();
+            for (j, x_scale_slice) in x_chunks.iter().enumerate() {
                 (scales[j], mins[j]) = make_qkx1_quants(15, 5, x_scale_slice);
             }
 
@@ -1619,7 +1631,8 @@ impl GgmlType for BlockQ4K {
             let sum_x2 = x.iter().map(|x| x * x).sum::<f32>();
             let sigma2 = 2. * sum_x2 / QK_K as f32;
 
-            for (j, x_scale_slice) in x.chunks_exact(32).enumerate() {
+            let (x_chunks, _) = x.as_chunks::<32>();
+            for (j, x_scale_slice) in x_chunks.iter().enumerate() {
                 for (l, (w_elem, x_elem)) in weights.iter_mut().zip(x_scale_slice).enumerate() {
                     let imatrix_row = sblk_idx % (n_per_row / QK_K);
                     let imatrix_w = imatrix_weights[imatrix_row * QK_K + 32 * j + l];
@@ -1816,7 +1829,8 @@ impl GgmlType for BlockQ5K {
             let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
             let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
 
-            for (j, x_scale_slice) in x.chunks_exact(32).enumerate() {
+            let (x_chunks, _) = x.as_chunks::<32>();
+            for (j, x_scale_slice) in x_chunks.iter().enumerate() {
                 (scales[j], mins[j]) = make_qkx1_quants(31, 5, x_scale_slice);
             }
 
@@ -1898,7 +1912,8 @@ impl GgmlType for BlockQ5K {
             let sum_x2 = x.iter().map(|x| x * x).sum::<f32>();
             let sigma2 = 2. * sum_x2 / QK_K as f32;
 
-            for (j, x_scale_slice) in x.chunks_exact(32).enumerate() {
+            let (x_chunks, _) = x.as_chunks::<32>();
+            for (j, x_scale_slice) in x_chunks.iter().enumerate() {
                 for (l, (w_elem, x_elem)) in weights.iter_mut().zip(x_scale_slice).enumerate() {
                     let imatrix_row = sblk_idx % (n_per_row / QK_K);
                     let imatrix_w = imatrix_weights[imatrix_row * QK_K + 32 * j + l];
@@ -2036,6 +2051,19 @@ impl GgmlType for BlockQ6K {
         xs3: &[Self],
         ys: &[Self::VecDotType],
     ) -> (f32, f32, f32, f32) {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            // Check the runtime feature set once for the whole output quad.
+            return unsafe {
+                (
+                    super::avx::vec_dot_q6k_q8k(n, xs0, ys),
+                    super::avx::vec_dot_q6k_q8k(n, xs1, ys),
+                    super::avx::vec_dot_q6k_q8k(n, xs2, ys),
+                    super::avx::vec_dot_q6k_q8k(n, xs3, ys),
+                )
+            };
+        }
+
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_4_q6k_q8k(n, xs0, xs1, xs2, xs3, ys);
 
@@ -2352,7 +2380,8 @@ impl GgmlType for BlockQ8K {
             }
             if amax == 0f32 {
                 y.d = 0f32;
-                y.qs.fill(0)
+                y.qs.fill(0);
+                y.bsums.fill(0)
             } else {
                 let iscale = -127f32 / max;
                 for (j, q) in y.qs.iter_mut().enumerate() {
@@ -2453,7 +2482,7 @@ pub fn matmul<T: GgmlType>(
             let (main, tail) = dst_row.split_at_mut(n_quad);
             let main_ptr = main.as_mut_ptr() as usize;
 
-            pool.execute_chunked(quads_total, |range| {
+            let dot_range = |range: std::ops::Range<usize>| {
                 let main_ptr = main_ptr as *mut f32;
                 for quad_idx in range {
                     let col = quad_idx * 4;
@@ -2473,7 +2502,14 @@ pub fn matmul<T: GgmlType>(
                         *base.add(3) = d3;
                     }
                 }
-            });
+            };
+            if cfg!(target_arch = "x86_64") && T::DTYPE == GgmlDType::Q6K && m == 1 {
+                // Compact Q6K GEMV has equal-sized dot products; static ranges
+                // avoid the shared cursor overhead on this short decode path.
+                pool.execute_static(quads_total, dot_range);
+            } else {
+                pool.execute_chunked(quads_total, dot_range);
+            }
             if n_tail >= 2 {
                 let col = n_quad;
                 let (d0, d1) = T::vec_dot_2(

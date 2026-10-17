@@ -607,6 +607,30 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     Ok(())
 }
 
+/// Dtypes `dequantize_f32_into` can write a row of. The rest fall back to a full
+/// `dequantize` plus `index_select`.
+fn cuda_row_dequant_supported(dtype: GgmlDType) -> bool {
+    matches!(
+        dtype,
+        GgmlDType::Q4_0
+            | GgmlDType::Q4_1
+            | GgmlDType::Q5_0
+            | GgmlDType::Q5_1
+            | GgmlDType::Q8_0
+            | GgmlDType::Mxfp4
+            | GgmlDType::Q2K
+            | GgmlDType::Q3K
+            | GgmlDType::Q4K
+            | GgmlDType::Q5K
+            | GgmlDType::Q6K
+            | GgmlDType::Q8K
+            | GgmlDType::Iq1S
+            | GgmlDType::Iq2Xxs
+            | GgmlDType::Iq3Xxs
+            | GgmlDType::Iq4Xs
+    )
+}
+
 impl QTensor {
     pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
@@ -768,6 +792,54 @@ impl QTensor {
         let storage = self.storage.dequantize(self.shape.elem_count())?;
         let none = crate::op::BackpropOp::none();
         crate::tensor::from_storage(storage, self.shape.clone(), none, false).to_device(device)
+    }
+
+    /// Dequantize only the rows named by `rows`, returning `[rows.len(), ..]`.
+    ///
+    /// An MoE expert weight is `[expert_count, n, k]`, but a token is routed to only
+    /// `expert_used_count` of those experts -- 8 of 256 for GLM, so expanding the whole
+    /// tensor moves 32x the data the model reads. Rows are expanded individually and
+    /// concatenated, so the traffic scales with the routing rather than the expert count.
+    ///
+    /// Duplicate entries in `rows` are expanded once each, so a caller that wants the
+    /// compact form should deduplicate first.
+    pub fn dequantize_rows(&self, rows: &[u32], device: &Device) -> Result<Tensor> {
+        let dims = self.shape.dims();
+        if dims.is_empty() {
+            crate::bail!("dequantize_rows needs a tensor of rank 1 or more")
+        }
+        let row_count = dims[0];
+        let row_elems: usize = dims[1..].iter().product();
+        for &row in rows {
+            if row as usize >= row_count {
+                crate::bail!("dequantize_rows row {row} is out of range for {row_count} rows")
+            }
+        }
+
+        let mut out_shape = vec![rows.len()];
+        out_shape.extend_from_slice(&dims[1..]);
+
+        // The CUDA path writes every row straight into one buffer. Expanding rows into
+        // separate tensors and concatenating costs a full copy of the result, and for a
+        // gathered MoE weight that copy is the largest tensor in the call.
+        // Dtypes without a row kernel (IQ1_M, Q8_1, F32, F16, BF16) take the fallback
+        // below. `dequantize_f32_into` rejects them, and `dequantize` already handles them.
+        let aligned = row_elems.is_multiple_of(self.dtype().block_size());
+        let cuda_rows = aligned && cuda_row_dequant_supported(self.dtype());
+        match (&self.storage, cuda_rows) {
+            (QStorage::Cuda(storage), true) => {
+                let storage = Storage::Cuda(storage.dequantize_rows(rows, row_elems)?);
+                let none = crate::op::BackpropOp::none();
+                crate::tensor::from_storage(storage, Shape::from(out_shape), none, false)
+                    .to_device(device)
+            }
+            _ => {
+                // No in-place path here: expand everything once and select.
+                let all = self.dequantize(device)?;
+                let idx = Tensor::from_slice(rows, (rows.len(),), device)?;
+                all.index_select(&idx, 0)
+            }
+        }
     }
 
     pub fn dequantize_f16(&self, device: &Device) -> Result<Tensor> {
@@ -1047,14 +1119,21 @@ impl QTensor {
             let Some((&k, batch)) = dims.split_last() else {
                 return Ok(None);
             };
-            let m: usize = batch.iter().product::<usize>().max(1);
+            let m: usize = batch.iter().product();
+            if m == 0 {
+                return Ok(None);
+            }
             let dtype = ts[0].dtype();
             let mut shapes = Vec::with_capacity(ts.len());
             for t in ts {
                 let Ok((n, tk)) = t.shape.dims2() else {
                     return Ok(None);
                 };
-                if tk != k || t.dtype() != dtype || !repack_x86::select(dtype, n, k) {
+                if tk != k
+                    || t.dtype() != dtype
+                    || !matches!(&t.storage, QStorage::Cpu(_))
+                    || !repack_x86::select(dtype, m, n, k)
+                {
                     return Ok(None);
                 }
                 shapes.push(n);
@@ -1374,5 +1453,24 @@ impl crate::Module for QMatMul {
                 xs.to_dtype(DType::F16)?.matmul(&w)?.to_dtype(in_dtype)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cuda_row_dequant_tests {
+    use super::{cuda_row_dequant_supported, GgmlDType};
+
+    #[test]
+    fn row_kernel_gate_matches_the_cuda_dequant_match() {
+        assert!(cuda_row_dequant_supported(GgmlDType::Q4_0));
+        assert!(cuda_row_dequant_supported(GgmlDType::Q8K));
+        assert!(cuda_row_dequant_supported(GgmlDType::Iq1S));
+        assert!(cuda_row_dequant_supported(GgmlDType::Iq4Xs));
+        assert!(cuda_row_dequant_supported(GgmlDType::Mxfp4));
+        assert!(!cuda_row_dequant_supported(GgmlDType::Iq1M));
+        assert!(!cuda_row_dequant_supported(GgmlDType::Q8_1));
+        assert!(!cuda_row_dequant_supported(GgmlDType::F32));
+        assert!(!cuda_row_dequant_supported(GgmlDType::F16));
+        assert!(!cuda_row_dequant_supported(GgmlDType::BF16));
     }
 }
