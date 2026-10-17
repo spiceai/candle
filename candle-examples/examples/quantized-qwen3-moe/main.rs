@@ -247,7 +247,7 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| DEFAULT_PROMPT.to_string());
 
     let prompt_str = format!("<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n");
-    print!("formatted prompt: {}", prompt_str);
+    print!("formatted prompt: {prompt_str}");
 
     let tokens = tos
         .tokenizer()

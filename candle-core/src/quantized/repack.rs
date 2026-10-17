@@ -789,6 +789,7 @@ define_gemv_fused!(
     QK8_0
 );
 
+/// Only reachable from the aarch64 gemv path; x86 uses `repack_x86`.
 #[cfg(target_arch = "aarch64")]
 pub(crate) fn try_gemv_fused(
     k: usize,
@@ -963,6 +964,7 @@ define_indexed_gemv!(
 #[cfg(target_arch = "aarch64")]
 const INDEXED_BUCKET_MIN_PAIRS: usize = 32;
 
+/// Only reachable from the aarch64 indexed-MoE path; x86 uses `repack_x86`.
 #[cfg(target_arch = "aarch64")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_indexed_gemv(

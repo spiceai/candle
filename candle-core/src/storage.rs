@@ -772,26 +772,27 @@ impl Storage {
         }
     }
 
-    pub(crate) fn matmul(
+    pub(crate) fn matmul_with_alpha(
         &self,
         rhs: &Self,
+        s: Option<f64>,
         bmnk: (usize, usize, usize, usize),
         lhs_layout: &Layout,
         rhs_layout: &Layout,
     ) -> Result<Self> {
-        self.same_device(rhs, "matmul")?;
-        self.same_dtype(rhs, "matmul")?;
+        self.same_device(rhs, "matmul_with_alpha")?;
+        self.same_dtype(rhs, "matmul_with_alpha")?;
         match (self, rhs) {
             (Self::Cpu(lhs), Self::Cpu(rhs)) => {
-                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                let storage = lhs.matmul_with_alpha(rhs, s, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Cpu(storage))
             }
             (Self::Cuda(lhs), Self::Cuda(rhs)) => {
-                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                let storage = lhs.matmul_with_alpha(rhs, s, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Cuda(storage))
             }
             (Self::Metal(lhs), Self::Metal(rhs)) => {
-                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                let storage = lhs.matmul_with_alpha(rhs, s, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {

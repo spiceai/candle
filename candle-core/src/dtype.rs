@@ -96,6 +96,7 @@ impl DType {
     pub fn size_in_bytes(&self) -> usize {
         match self {
             Self::U8 => 1,
+            Self::F8E4M3 => 1,
             Self::U32 => 4,
             Self::I16 => 2,
             Self::I32 => 4,
@@ -104,7 +105,6 @@ impl DType {
             Self::F16 => 2,
             Self::F32 => 4,
             Self::F64 => 8,
-            Self::F8E4M3 => 1,
             Self::F6E2M3 => 0, // 6 bits
             Self::F6E3M2 => 0, // 6 bits
             Self::F4 => 0,     // 4 bits
@@ -241,6 +241,24 @@ pub trait IntDType: WithDType + num_traits::Bounded {
     fn as_usize(&self) -> usize;
 }
 
+impl IntDType for i16 {
+    fn is_true(&self) -> bool {
+        *self != 0
+    }
+    fn as_usize(&self) -> usize {
+        *self as usize
+    }
+}
+
+impl IntDType for i32 {
+    fn is_true(&self) -> bool {
+        *self != 0
+    }
+    fn as_usize(&self) -> usize {
+        *self as usize
+    }
+}
+
 impl IntDType for i64 {
     fn is_true(&self) -> bool {
         *self != 0
@@ -260,24 +278,6 @@ impl IntDType for u32 {
 }
 
 impl IntDType for u8 {
-    fn is_true(&self) -> bool {
-        *self != 0
-    }
-    fn as_usize(&self) -> usize {
-        *self as usize
-    }
-}
-
-impl IntDType for i16 {
-    fn is_true(&self) -> bool {
-        *self != 0
-    }
-    fn as_usize(&self) -> usize {
-        *self as usize
-    }
-}
-
-impl IntDType for i32 {
     fn is_true(&self) -> bool {
         *self != 0
     }

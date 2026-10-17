@@ -1540,8 +1540,9 @@ impl Tensor {
             return Ok(from_storage(storage, c_shape, op, false));
         }
 
-        let storage = self.storage().matmul(
+        let storage = self.storage().matmul_with_alpha(
             &rhs.storage(),
+            None,
             (batching, m, n, k),
             self.layout(),
             rhs.layout(),

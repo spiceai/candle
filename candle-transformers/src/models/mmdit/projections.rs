@@ -1,5 +1,5 @@
 use candle::{Module, Result, Tensor};
-use candle_nn as nn;
+use candle_nn::{self as nn};
 
 pub struct Qkv {
     pub q: Tensor,

@@ -27,6 +27,7 @@ pub const QK5_0: usize = 32;
 pub const QK5_1: usize = 32;
 pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
+pub const QK_MXFP4: usize = 32;
 
 pub trait GgmlType: Sized + Clone + Send + Sync {
     const DTYPE: GgmlDType;
@@ -46,10 +47,12 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
         _imatrix_weights: &[f32],
         _n_per_row: usize,
     ) {
-        panic!(
-            "`from_float_imatrix` is unimplemented for {:?}",
-            Self::DTYPE
-        );
+        let _ = (|| -> Result<()> {
+            crate::bail!(
+                "`from_float_imatrix` is unimplemented for {:?}",
+                Self::DTYPE
+            );
+        })();
     }
 
     fn direct_copy(_xs: &[f32], _ys: &mut [Self]) {}
@@ -2794,6 +2797,469 @@ impl GgmlType for bf16 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// i-quant blocks (IQ2_XXS, IQ3_XXS, IQ4_XS, IQ1_S, IQ1_M).
+//
+// Only `to_float` (dequantization) is implemented; these formats require an
+// importance matrix to quantize, so `from_float` is unsupported, and the
+// quantized CPU mat-mul (`vec_dot`) path is not used for them (inference runs
+// through dequantize + matmul), so the vec-dot methods bail.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ2XXS {
+    pub(crate) d: f16,
+    pub(crate) qs: [u16; QK_K / 8],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ2XXS>() == 66);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ3XXS {
+    pub(crate) d: f16,
+    pub(crate) qs: [u8; 3 * QK_K / 8],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ3XXS>() == 98);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ4XS {
+    pub(crate) d: f16,
+    pub(crate) scales_h: u16,
+    pub(crate) scales_l: [u8; QK_K / 64],
+    pub(crate) qs: [u8; QK_K / 2],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ4XS>() == 136);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ1S {
+    pub(crate) d: f16,
+    pub(crate) qs: [u8; QK_K / 8],
+    pub(crate) qh: [u16; QK_K / 32],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ1S>() == 50);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ1M {
+    pub(crate) qs: [u8; QK_K / 8],
+    pub(crate) qh: [u8; QK_K / 16],
+    pub(crate) scales: [u8; QK_K / 32],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ1M>() == 56);
+
+impl GgmlType for BlockIQ2XXS {
+    const DTYPE: GgmlDType = GgmlDType::Iq2Xxs;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq2_xxs` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::{IQ2XXS_GRID, KMASK_IQ2XS, KSIGNS_IQ2XS};
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = block.d.to_f32();
+            for ib32 in 0..(QK_K / 32) {
+                let q2 = &block.qs[4 * ib32..4 * ib32 + 4];
+                // The first two u16 hold four 8-bit grid indices (little-endian byte order).
+                let aux8 = [
+                    (q2[0] & 0xff) as u8,
+                    (q2[0] >> 8) as u8,
+                    (q2[1] & 0xff) as u8,
+                    (q2[1] >> 8) as u8,
+                ];
+                // The last two u16 hold the 4-bit scale (top nibble) and 4x7 sign bits.
+                let aux32_1 = q2[2] as u32 | ((q2[3] as u32) << 16);
+                let db = d * (0.5 + (aux32_1 >> 28) as f32) * 0.25;
+                for l in 0..4 {
+                    let grid = IQ2XXS_GRID[aux8[l] as usize].to_le_bytes();
+                    let signs = KSIGNS_IQ2XS[((aux32_1 >> (7 * l)) & 127) as usize];
+                    let off = 32 * ib32 + 8 * l;
+                    for j in 0..8 {
+                        let s = if signs & KMASK_IQ2XS[j] != 0 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        y[off + j] = db * grid[j] as f32 * s;
+                    }
+                }
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ2_XXS quantization requires an importance matrix and is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        // i-quant CPU mat-mul (vec_dot) is unimplemented; inference dequantizes then matmuls.
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+impl GgmlType for BlockIQ3XXS {
+    const DTYPE: GgmlDType = GgmlDType::Iq3Xxs;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq3_xxs` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::{IQ3XXS_GRID, KMASK_IQ2XS, KSIGNS_IQ2XS};
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = block.d.to_f32();
+            let qs = &block.qs;
+            // Scales and signs live in a separate region starting at byte QK_K/4 = 64.
+            let sas = QK_K / 4;
+            // Running offset into the grid-index region (8 bytes per sub-block).
+            let mut qs_off = 0usize;
+            for ib32 in 0..(QK_K / 32) {
+                let base = sas + 4 * ib32;
+                let aux32 = qs[base] as u32
+                    | ((qs[base + 1] as u32) << 8)
+                    | ((qs[base + 2] as u32) << 16)
+                    | ((qs[base + 3] as u32) << 24);
+                let db = d * (0.5 + (aux32 >> 28) as f32) * 0.5;
+                for l in 0..4 {
+                    let signs = KSIGNS_IQ2XS[((aux32 >> (7 * l)) & 127) as usize];
+                    let grid1 = IQ3XXS_GRID[qs[qs_off + 2 * l] as usize].to_le_bytes();
+                    let grid2 = IQ3XXS_GRID[qs[qs_off + 2 * l + 1] as usize].to_le_bytes();
+                    let off = 32 * ib32 + 8 * l;
+                    for j in 0..4 {
+                        let s0 = if signs & KMASK_IQ2XS[j] != 0 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        let s1 = if signs & KMASK_IQ2XS[j + 4] != 0 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        y[off + j] = db * grid1[j] as f32 * s0;
+                        y[off + j + 4] = db * grid2[j] as f32 * s1;
+                    }
+                }
+                qs_off += 8;
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ3_XXS quantization requires an importance matrix and is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+impl GgmlType for BlockIQ4XS {
+    const DTYPE: GgmlDType = GgmlDType::Iq4Xs;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq4_xs` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::KVALUES_IQ4NL;
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = block.d.to_f32();
+            let qs = &block.qs;
+            for ib in 0..(QK_K / 32) {
+                // 6-bit scale: 4 low bits from scales_l, 2 high bits from scales_h, bias 32.
+                let ls = (((block.scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) as i32)
+                    | ((((block.scales_h >> (2 * ib)) & 3) as i32) << 4);
+                let dl = d * (ls - 32) as f32;
+                let off = 32 * ib;
+                let qoff = 16 * ib;
+                for j in 0..16 {
+                    y[off + j] = dl * KVALUES_IQ4NL[(qs[qoff + j] & 0xf) as usize] as f32;
+                    y[off + j + 16] = dl * KVALUES_IQ4NL[(qs[qoff + j] >> 4) as usize] as f32;
+                }
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ4_XS quantization is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+impl GgmlType for BlockIQ1S {
+    const DTYPE: GgmlDType = GgmlDType::Iq1S;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq1_s` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::{IQ1S_DELTA, IQ1S_GRID};
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = block.d.to_f32();
+            let qs = &block.qs;
+            let qh = &block.qh;
+            let mut qs_i = 0usize;
+            for (ib, &qh_ib) in qh.iter().enumerate() {
+                // Single 3-bit sub-scale lives in the top 3 bits (below the sign bit).
+                let dl = d * (2 * ((qh_ib >> 12) & 7) + 1) as f32;
+                // Sign bit selects the (fixed) delta sign for the whole sub-block.
+                let delta = if qh_ib & 0x8000 != 0 {
+                    -IQ1S_DELTA
+                } else {
+                    IQ1S_DELTA
+                };
+                let off = 32 * ib;
+                // Four groups of 8: 8 grid-index bits from qs + 3 high bits from qh.
+                for l in 0..4 {
+                    let idx = qs[qs_i + l] as u16 | (((qh_ib >> (3 * l)) & 7) << 8);
+                    let grid = IQ1S_GRID[idx as usize].to_le_bytes();
+                    for j in 0..8 {
+                        y[off + 8 * l + j] = dl * (grid[j] as i8 as f32 + delta);
+                    }
+                }
+                qs_i += 4;
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ1_S quantization requires an importance matrix and is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        // i-quant CPU mat-mul (vec_dot) is unimplemented; inference dequantizes then matmuls.
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+impl GgmlType for BlockIQ1M {
+    const DTYPE: GgmlDType = GgmlDType::Iq1M;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    // Port of `dequantize_row_iq1_m` (ggml-quants.c).
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        use super::iquants::{IQ1S_DELTA, IQ1S_GRID};
+        for (block, y) in group_for_dequantization(xs, ys) {
+            // `scales` (8 bytes) viewed as four little-endian u16.
+            let sc = [
+                block.scales[0] as u16 | ((block.scales[1] as u16) << 8),
+                block.scales[2] as u16 | ((block.scales[3] as u16) << 8),
+                block.scales[4] as u16 | ((block.scales[5] as u16) << 8),
+                block.scales[6] as u16 | ((block.scales[7] as u16) << 8),
+            ];
+            // Superblock scale = top nibbles of the four u16, reinterpreted as f16.
+            let scale_u16 = (sc[0] >> 12)
+                | ((sc[1] >> 8) & 0x00f0)
+                | ((sc[2] >> 4) & 0x0f00)
+                | (sc[3] & 0xf000);
+            let d = f16::from_bits(scale_u16).to_f32();
+            let qs = &block.qs;
+            let qh = &block.qh;
+            let mut qs_i = 0usize;
+            let mut qh_i = 0usize;
+            for ib in 0..(QK_K / 32) {
+                // Two 3-bit sub-scales packed in sc[ib/2].
+                let dl1 = d * (2 * ((sc[ib / 2] >> (6 * (ib % 2))) & 0x7) + 1) as f32;
+                let dl2 = d * (2 * ((sc[ib / 2] >> (6 * (ib % 2) + 3)) & 0x7) + 1) as f32;
+                // 11-bit grid indices: 8 bits from qs + 3 bits from qh.
+                let idx = [
+                    qs[qs_i] as u16 | (((qh[qh_i] as u16) << 8) & 0x700),
+                    qs[qs_i + 1] as u16 | (((qh[qh_i] as u16) << 4) & 0x700),
+                    qs[qs_i + 2] as u16 | (((qh[qh_i + 1] as u16) << 8) & 0x700),
+                    qs[qs_i + 3] as u16 | (((qh[qh_i + 1] as u16) << 4) & 0x700),
+                ];
+                let delta = [
+                    if qh[qh_i] & 0x08 != 0 {
+                        -IQ1S_DELTA
+                    } else {
+                        IQ1S_DELTA
+                    },
+                    if qh[qh_i] & 0x80 != 0 {
+                        -IQ1S_DELTA
+                    } else {
+                        IQ1S_DELTA
+                    },
+                    if qh[qh_i + 1] & 0x08 != 0 {
+                        -IQ1S_DELTA
+                    } else {
+                        IQ1S_DELTA
+                    },
+                    if qh[qh_i + 1] & 0x80 != 0 {
+                        -IQ1S_DELTA
+                    } else {
+                        IQ1S_DELTA
+                    },
+                ];
+                let off = 32 * ib;
+                // First two groups use dl1, next two use dl2. Grid bytes are signed i8.
+                for l in 0..2 {
+                    let grid = IQ1S_GRID[idx[l] as usize].to_le_bytes();
+                    for j in 0..8 {
+                        y[off + 8 * l + j] = dl1 * (grid[j] as i8 as f32 + delta[l]);
+                    }
+                }
+                for l in 2..4 {
+                    let grid = IQ1S_GRID[idx[l] as usize].to_le_bytes();
+                    for j in 0..8 {
+                        y[off + 8 * l + j] = dl2 * (grid[j] as i8 as f32 + delta[l]);
+                    }
+                }
+                qs_i += 4;
+                qh_i += 2;
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // IQ1_M quantization requires an importance matrix and is not supported.
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MXFP4 (OCP microscaling FP4): 32 weights per block sharing one E8M0 scale
+// byte, followed by 16 bytes of packed E2M1 (FP4) codes. Quantization-aware
+// trained models store weights natively in this format, so their GGUFs carry
+// MXFP4 tensors at every quant level rather than only at 4-bit.
+//
+// Dequant-only, like the i-quants above: there is no q8_1 mat-mul kernel wired
+// for MXFP4 yet, so inference runs through dequantize + matmul.
+// ---------------------------------------------------------------------------
+
+/// `kvalues_fp4` (ggml-common.h): the 16 E2M1 code points, tabulated at twice
+/// their nominal value so the codebook stays integral. The block scale is
+/// halved to compensate — see [`e8m0_to_f32_half`].
+const KVALUES_MXFP4: [i8; 16] = [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
+
+/// `ggml_e8m0_to_fp32_half` (ggml-impl.h): decode an E8M0 exponent byte to
+/// `2^(e - 127) / 2`, the halved scale that pairs with [`KVALUES_MXFP4`].
+/// NaN (`e == 0xff`) is not represented — ggml does not encode it either.
+fn e8m0_to_f32_half(e: u8) -> f32 {
+    let bits = if e < 2 {
+        // Subnormal: 0x0020_0000 is 2^-128, 0x0040_0000 is 2^-127.
+        0x0020_0000u32 << e
+    } else {
+        // 0.5 * 2^(e - 127) == 2^(e - 128), i.e. a normal with exponent field e - 1.
+        u32::from(e - 1) << 23
+    };
+    f32::from_bits(bits)
+}
+
+/// Nearest MXFP4 code for `x` under block scale `d` — `best_index_mxfp4`
+/// (ggml-quants.c). Ties go to the lower index, matching ggml's strict `<`.
+fn best_index_mxfp4(x: f32, d: f32) -> u8 {
+    let mut best_index = 0usize;
+    let mut best_err = (f32::from(KVALUES_MXFP4[0]) * d - x).abs();
+    for (i, &v) in KVALUES_MXFP4.iter().enumerate().skip(1) {
+        let err = (f32::from(v) * d - x).abs();
+        if err < best_err {
+            best_index = i;
+            best_err = err;
+        }
+    }
+    // The codebook has 16 entries, so the index always fits in a nibble.
+    best_index as u8
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockMxfp4 {
+    pub(crate) e: u8,
+    pub(crate) qs: [u8; QK_MXFP4 / 2],
+}
+const _: () = assert!(std::mem::size_of::<BlockMxfp4>() == 17);
+
+impl GgmlType for BlockMxfp4 {
+    const DTYPE: GgmlDType = GgmlDType::Mxfp4;
+    const BLCK_SIZE: usize = QK_MXFP4;
+    type VecDotType = BlockQ8_0;
+
+    // Port of `dequantize_row_mxfp4` (ggml-quants.c). Each byte packs two codes:
+    // the low nibble feeds the first half of the block, the high nibble the second.
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        let half = QK_MXFP4 / 2;
+        for (block, y) in group_for_dequantization(xs, ys) {
+            let d = e8m0_to_f32_half(block.e);
+            for (j, &q) in block.qs.iter().enumerate() {
+                y[j] = d * f32::from(KVALUES_MXFP4[(q & 0x0f) as usize]);
+                y[j + half] = d * f32::from(KVALUES_MXFP4[(q >> 4) as usize]);
+            }
+        }
+    }
+
+    // Port of `quantize_row_mxfp4_ref` (ggml-quants.c).
+    fn from_float(xs: &[f32], ys: &mut [Self]) {
+        let qk = Self::BLCK_SIZE;
+        let half = qk / 2;
+        let k = xs.len();
+        debug_assert!(k.is_multiple_of(qk), "{k} is not divisible by {qk}");
+        debug_assert_eq!(
+            ys.len(),
+            k / qk,
+            "size mismatch {} {} {qk}",
+            xs.len(),
+            ys.len(),
+        );
+
+        for (block, x) in ys.iter_mut().zip(xs.chunks_exact(qk)) {
+            let amax = x.iter().fold(0f32, |acc, v| acc.max(v.abs()));
+            // Exponent chosen so amax lands in the codebook's top bucket (max
+            // code 12 == 6 * 2, hence the -2 on the log2 before the 127 bias).
+            // A zeroed block keeps e = 0, whose scale multiplies the all-zero
+            // codes to zero anyway.
+            let e = if amax > 0.0 {
+                let exp = amax.log2().floor() - 2.0 + 127.0;
+                // Saturate rather than wrap: a subnormal-scale input could
+                // otherwise push the exponent outside the E8M0 range.
+                exp.clamp(0.0, 255.0) as u8
+            } else {
+                0
+            };
+            let d = e8m0_to_f32_half(e);
+            block.e = e;
+            for (j, q) in block.qs.iter_mut().enumerate() {
+                *q = best_index_mxfp4(x[j], d) | (best_index_mxfp4(x[j + half], d) << 4);
+            }
+        }
+    }
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot is not implemented for {:?}", Self::DTYPE)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> f32 {
+        unimplemented!("vec_dot_unopt is not implemented for {:?}", Self::DTYPE)
+    }
+}
+
 macro_rules! verify_block_size {
     ( $block_type:ident ) => {
         const _: () =
@@ -2810,6 +3276,142 @@ macro_rules! verify_block_sizes {
 }
 
 verify_block_sizes!(
-    BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
-    BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
+    BlockQ4_0,
+    BlockQ4_1,
+    BlockQ5_0,
+    BlockQ5_1,
+    BlockQ8_0,
+    BlockQ8_1,
+    BlockQ2K,
+    BlockQ3K,
+    BlockQ4K,
+    BlockQ5K,
+    BlockQ6K,
+    BlockQ8K,
+    BlockIQ2XXS,
+    BlockIQ3XXS,
+    BlockIQ4XS,
+    BlockIQ1S,
+    BlockIQ1M,
+    BlockMxfp4,
+    f32,
+    f16,
+    bf16
 );
+
+#[cfg(test)]
+mod mxfp4_tests {
+    use super::{BlockMxfp4, GgmlType, QK_MXFP4};
+
+    /// The nominal E2M1 code points. `KVALUES_MXFP4` tabulates twice these, and
+    /// the E8M0 scale is halved to compensate, so `e = 127` (scale 0.5) must
+    /// reproduce them exactly.
+    const NOMINAL: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+
+    #[test]
+    fn dequantizes_to_the_e2m1_code_points() {
+        let mut block = BlockMxfp4::zeros();
+        block.e = 127;
+        // Low nibbles walk codes 0..=7, high nibbles the negated half 8..=15.
+        for (j, q) in block.qs.iter_mut().enumerate() {
+            let code = (j % 8) as u8;
+            *q = code | ((code | 0x8) << 4);
+        }
+
+        let mut ys = vec![0f32; QK_MXFP4];
+        BlockMxfp4::to_float(std::slice::from_ref(&block), &mut ys);
+
+        // Nibble order matters: the low nibble feeds weight j, the high nibble j+16.
+        for j in 0..QK_MXFP4 / 2 {
+            let expected = NOMINAL[j % 8];
+            assert_eq!(ys[j], expected, "low nibble at {j}");
+            assert_eq!(ys[j + QK_MXFP4 / 2], -expected, "high nibble at {j}");
+        }
+    }
+
+    /// The E8M0 scale is a pure power of two, so representable values survive a
+    /// quantize -> dequantize round trip bit-exactly.
+    #[test]
+    fn round_trips_representable_values() {
+        let xs: Vec<f32> = (0..2 * QK_MXFP4)
+            .map(|i| {
+                let nominal = NOMINAL[i % 8];
+                if i % 16 < 8 {
+                    nominal
+                } else {
+                    -nominal
+                }
+            })
+            .collect();
+
+        let mut blocks = vec![BlockMxfp4::zeros(); 2];
+        BlockMxfp4::from_float(&xs, &mut blocks);
+        let mut ys = vec![0f32; xs.len()];
+        BlockMxfp4::to_float(&blocks, &mut ys);
+
+        assert_eq!(xs, ys);
+    }
+
+    /// A zeroed block must dequantize to zeros, not to subnormal noise or NaN:
+    /// `e = 0` is the smallest E8M0 exponent and code 0 is zero in E2M1.
+    #[test]
+    fn zero_block_dequantizes_to_zeros() {
+        let mut ys = vec![f32::NAN; QK_MXFP4];
+        BlockMxfp4::to_float(std::slice::from_ref(&BlockMxfp4::zeros()), &mut ys);
+        assert!(ys.iter().all(|&y| y == 0.0), "{ys:?}");
+
+        let mut blocks = vec![BlockMxfp4::zeros(); 1];
+        BlockMxfp4::from_float(&[0f32; QK_MXFP4], &mut blocks);
+        assert_eq!(blocks[0].e, 0);
+        assert!(blocks[0].qs.iter().all(|&q| q == 0));
+    }
+
+    /// Every input magnitude picks a scale whose top code (6.0 nominal) covers
+    /// the block maximum, so the largest weight is never clipped.
+    #[test]
+    fn scale_selection_never_clips_the_block_maximum() {
+        for exp in -20i32..20 {
+            let amax = 1.7f32 * 2f32.powi(exp);
+            let mut xs = vec![0f32; QK_MXFP4];
+            xs[5] = amax;
+            xs[21] = -amax;
+
+            let mut blocks = vec![BlockMxfp4::zeros(); 1];
+            BlockMxfp4::from_float(&xs, &mut blocks);
+            let mut ys = vec![0f32; QK_MXFP4];
+            BlockMxfp4::to_float(&blocks, &mut ys);
+
+            // 6.0 is the largest code, so the reconstruction of amax must not be
+            // saturated below it: |ys| stays within one step (2.0/6 of amax).
+            let err = (ys[5] - amax).abs().max((ys[21] + amax).abs());
+            assert!(
+                err <= amax / 3.0,
+                "exp {exp}: amax {amax} reconstructed as {} / {} (err {err})",
+                ys[5],
+                ys[21]
+            );
+        }
+    }
+
+    /// E8M0 decoding: `e = 127` is the unit exponent halved, and each step is a
+    /// factor of two, including across the subnormal boundary ggml special-cases.
+    #[test]
+    fn e8m0_scale_decodes_as_a_power_of_two_ladder() {
+        assert_eq!(super::e8m0_to_f32_half(127), 0.5);
+        assert_eq!(super::e8m0_to_f32_half(128), 1.0);
+        assert_eq!(super::e8m0_to_f32_half(126), 0.25);
+        // 2^-128 and 2^-127 are subnormal in f32 (and `powi` underflows there),
+        // so compare the bit patterns ggml hard-codes for them.
+        assert_eq!(super::e8m0_to_f32_half(0), f32::from_bits(0x0020_0000));
+        assert_eq!(super::e8m0_to_f32_half(1), f32::from_bits(0x0040_0000));
+        // e = 2 is the first normal: 2^-126 == f32::MIN_POSITIVE.
+        assert_eq!(super::e8m0_to_f32_half(2), f32::MIN_POSITIVE);
+        for e in 2u8..=254 {
+            assert_eq!(
+                super::e8m0_to_f32_half(e + 1),
+                super::e8m0_to_f32_half(e) * 2.0,
+                "e = {e}"
+            );
+        }
+    }
+}
