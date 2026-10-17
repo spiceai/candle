@@ -1,5 +1,3 @@
-use std::f64;
-
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     embedding, layer_norm, linear, Activation, Embedding, LayerNorm, LayerNormConfig, Linear,

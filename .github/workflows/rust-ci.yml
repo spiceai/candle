@@ -78,8 +78,9 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
-      - name: Remove cargo config (macOS ring crate fix)
-        if: runner.os == 'macOS'
+      - name: Remove cargo config (macOS ring crate fix, Windows rustc 1.99 native crash)
+        if: runner.os == 'macOS' || runner.os == 'Windows'
+        shell: bash
         run: rm -f .cargo/config.toml
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2

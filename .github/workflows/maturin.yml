@@ -34,6 +34,11 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: '3.13'
+      # .cargo/config.toml sets target-cpu=native. Cross-compiling aarch64 with
+      # that flag makes rustc 1.99.1 SIGSEGV inside rayon-core.
+      - name: Drop host target-cpu for aarch64
+        if: matrix.target == 'aarch64'
+        run: rm -f .cargo/config.toml
       - name: Build wheels
         uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
@@ -66,6 +71,11 @@ jobs:
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # rustc 1.99.1 exits STATUS_ILLEGAL_INSTRUCTION when .cargo/config.toml
+      # sets target-cpu=native on the windows-latest runner.
+      - name: Drop host target-cpu
+        shell: bash
+        run: rm -f .cargo/config.toml
       - name: Build wheels
         uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
