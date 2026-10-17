@@ -117,12 +117,17 @@ fn quantize_q8_1(
     Ok(())
 }
 
-fn dequantize_f32(
+/// Expand `elem_count` elements from `byte_offset` into `dst` at `dst_elem_offset`.
+#[allow(clippy::too_many_arguments)]
+fn dequantize_f32_into(
     data: &PaddedCudaSlice,
     dtype: GgmlDType,
+    byte_offset: usize,
     elem_count: usize,
+    dst: &mut cudarc::driver::CudaSlice<f32>,
+    dst_elem_offset: usize,
     dev: &CudaDevice,
-) -> Result<CudaStorage> {
+) -> Result<()> {
     let nb = elem_count.div_ceil(256);
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f32", false, 32, nb),
@@ -158,7 +163,6 @@ fn dequantize_f32(
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(elem_count)? };
     // See e.g.
     // https://github.com/ggerganov/llama.cpp/blob/cbbd1efa06f8c09f9dff58ff9d9af509cc4c152b/ggml-cuda.cu#L7270
     let cfg = cudarc::driver::LaunchConfig {
@@ -167,10 +171,12 @@ fn dequantize_f32(
         shared_mem_bytes: 0,
     };
 
+    let src = data.inner.slice(byte_offset..);
+    let mut out = dst.slice_mut(dst_elem_offset..);
     if is_k {
         let mut builder = func.builder();
-        builder.arg(&data.inner);
-        builder.arg(&dst);
+        builder.arg(&src);
+        builder.arg(&mut out);
         unsafe { builder.launch(cfg) }.w()?;
     } else {
         let nb32 = match dtype {
@@ -178,10 +184,64 @@ fn dequantize_f32(
             _ => elem_count / 32,
         };
         let mut builder = func.builder();
-        builder.arg(&data.inner);
-        builder.arg(&dst);
+        builder.arg(&src);
+        builder.arg(&mut out);
         barg!(builder, nb32 as i32);
         unsafe { builder.launch(cfg) }.w()?;
+    }
+    Ok(())
+}
+
+/// Whole-buffer dequantize: the offset form starting at zero.
+fn dequantize_f32(
+    data: &PaddedCudaSlice,
+    dtype: GgmlDType,
+    elem_count: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    let mut dst = unsafe { dev.alloc::<f32>(elem_count)? };
+    dequantize_f32_into(data, dtype, 0, elem_count, &mut dst, 0, dev)?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
+/// Expand the named leading-dimension rows into ONE contiguous f32 buffer.
+///
+/// Each row is written straight to its final offset. Expanding rows separately and
+/// concatenating instead costs a full copy of the result (`copy2d_f32`), which for a
+/// gathered MoE weight is the largest tensor in the call.
+fn dequantize_f32_rows(
+    data: &PaddedCudaSlice,
+    dtype: GgmlDType,
+    rows: &[u32],
+    row_elems: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    let block_size = dtype.block_size();
+    if !row_elems.is_multiple_of(block_size) {
+        crate::bail!(
+            "dequantize_f32_rows row of {row_elems} elements is not a multiple of the \
+             {dtype:?} block size {block_size}"
+        )
+    }
+    let total = row_elems
+        .checked_mul(rows.len())
+        .ok_or_else(|| crate::Error::msg("dequantize_f32_rows size overflow"))?;
+    let mut dst = unsafe { dev.alloc::<f32>(total)? };
+    let row_bytes = (row_elems / block_size) * dtype.type_size();
+    for (slot, &row) in rows.iter().enumerate() {
+        let src_bytes = row as usize * row_bytes;
+        if src_bytes + row_bytes > data.len {
+            crate::bail!("dequantize_f32_rows row {row} reads past the quantized buffer")
+        }
+        dequantize_f32_into(
+            data,
+            dtype,
+            src_bytes,
+            row_elems,
+            &mut dst,
+            slot * row_elems,
+            dev,
+        )?;
     }
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
@@ -749,6 +809,11 @@ impl QCudaStorage {
 
     pub fn dequantize_f16(&self, elem_count: usize) -> Result<CudaStorage> {
         dequantize_f16(&self.data, self.dtype, elem_count, self.device())
+    }
+
+    /// Expand the named rows into one contiguous buffer, with no concatenation.
+    pub fn dequantize_rows(&self, rows: &[u32], row_elems: usize) -> Result<CudaStorage> {
+        dequantize_f32_rows(&self.data, self.dtype, rows, row_elems, self.device())
     }
 
     pub fn quantize(&mut self, src: &CudaStorage) -> Result<()> {
