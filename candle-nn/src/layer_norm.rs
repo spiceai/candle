@@ -28,7 +28,7 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use candle::{DType, Error, Module, Result, Tensor, D};
+use candle::{DType, Module, Result, Tensor, D};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -153,19 +153,21 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     // Convert old format to new format if needed from a PyTorch state_dict
     // Safetensors not always in new weight/bias format
     // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_utils.py#L575
+    // A fresh VarMap contains neither name. `get_with_hints` is what creates
+    // the parameter, so a missing alias must fall through to the canonical name
+    // instead of returning before that call.
     let weight_tensor_name = ["weight", "gamma"]
-        .iter()
+        .into_iter()
         .find(|&name| vb.contains_tensor(name))
-        .ok_or_else(|| Error::Msg("Failed to find weight tensor".into()))?;
+        .unwrap_or("weight");
 
     let weight = vb.get_with_hints(size, weight_tensor_name, crate::Init::Const(1.))?;
 
-    let bias_tensor_name = ["bias", "beta"]
-        .iter()
-        .find(|&name| vb.contains_tensor(name))
-        .ok_or_else(|| Error::Msg("Failed to find weight tensor".into()))?;
-
     let bias = if config.affine {
+        let bias_tensor_name = ["bias", "beta"]
+            .into_iter()
+            .find(|&name| vb.contains_tensor(name))
+            .unwrap_or("bias");
         Some(vb.get_with_hints(size, bias_tensor_name, crate::Init::Const(0.))?)
     } else {
         None

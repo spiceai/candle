@@ -607,6 +607,30 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     Ok(())
 }
 
+/// Dtypes `dequantize_f32_into` can write a row of. The rest fall back to a full
+/// `dequantize` plus `index_select`.
+fn cuda_row_dequant_supported(dtype: GgmlDType) -> bool {
+    matches!(
+        dtype,
+        GgmlDType::Q4_0
+            | GgmlDType::Q4_1
+            | GgmlDType::Q5_0
+            | GgmlDType::Q5_1
+            | GgmlDType::Q8_0
+            | GgmlDType::Mxfp4
+            | GgmlDType::Q2K
+            | GgmlDType::Q3K
+            | GgmlDType::Q4K
+            | GgmlDType::Q5K
+            | GgmlDType::Q6K
+            | GgmlDType::Q8K
+            | GgmlDType::Iq1S
+            | GgmlDType::Iq2Xxs
+            | GgmlDType::Iq3Xxs
+            | GgmlDType::Iq4Xs
+    )
+}
+
 impl QTensor {
     pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
@@ -798,8 +822,11 @@ impl QTensor {
         // The CUDA path writes every row straight into one buffer. Expanding rows into
         // separate tensors and concatenating costs a full copy of the result, and for a
         // gathered MoE weight that copy is the largest tensor in the call.
+        // Dtypes without a row kernel (IQ1_M, Q8_1, F32, F16, BF16) take the fallback
+        // below. `dequantize_f32_into` rejects them, and `dequantize` already handles them.
         let aligned = row_elems.is_multiple_of(self.dtype().block_size());
-        match (&self.storage, aligned) {
+        let cuda_rows = aligned && cuda_row_dequant_supported(self.dtype());
+        match (&self.storage, cuda_rows) {
             (QStorage::Cuda(storage), true) => {
                 let storage = Storage::Cuda(storage.dequantize_rows(rows, row_elems)?);
                 let none = crate::op::BackpropOp::none();
@@ -1426,5 +1453,24 @@ impl crate::Module for QMatMul {
                 xs.to_dtype(DType::F16)?.matmul(&w)?.to_dtype(in_dtype)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cuda_row_dequant_tests {
+    use super::{cuda_row_dequant_supported, GgmlDType};
+
+    #[test]
+    fn row_kernel_gate_matches_the_cuda_dequant_match() {
+        assert!(cuda_row_dequant_supported(GgmlDType::Q4_0));
+        assert!(cuda_row_dequant_supported(GgmlDType::Q8K));
+        assert!(cuda_row_dequant_supported(GgmlDType::Iq1S));
+        assert!(cuda_row_dequant_supported(GgmlDType::Iq4Xs));
+        assert!(cuda_row_dequant_supported(GgmlDType::Mxfp4));
+        assert!(!cuda_row_dequant_supported(GgmlDType::Iq1M));
+        assert!(!cuda_row_dequant_supported(GgmlDType::Q8_1));
+        assert!(!cuda_row_dequant_supported(GgmlDType::F32));
+        assert!(!cuda_row_dequant_supported(GgmlDType::F16));
+        assert!(!cuda_row_dequant_supported(GgmlDType::BF16));
     }
 }
