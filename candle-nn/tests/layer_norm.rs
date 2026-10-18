@@ -9,6 +9,56 @@ use candle::{test_utils, Device, Tensor};
 use candle_nn::{LayerNorm, Module};
 
 #[test]
+fn layer_norm_initializes_from_an_empty_varmap() -> Result<()> {
+    let device = &Device::Cpu;
+    let varmap = candle_nn::VarMap::new();
+    let vb = candle_nn::VarBuilder::from_varmap(&varmap, candle::DType::F32, device);
+    let ln = candle_nn::layer_norm(4, 1e-5, vb)?;
+    assert_eq!(ln.weight().dims(), &[4]);
+    assert_eq!(ln.bias().map(|bias| bias.dims().to_vec()), Some(vec![4]));
+    Ok(())
+}
+
+#[test]
+fn layer_norm_no_bias_loads_a_weight_only_checkpoint() -> Result<()> {
+    let device = &Device::Cpu;
+    let mut tensors = std::collections::HashMap::new();
+    tensors.insert(
+        "weight".to_string(),
+        Tensor::ones((4,), candle::DType::F32, device)?,
+    );
+    let vb = candle_nn::VarBuilder::from_tensors(tensors, candle::DType::F32, device);
+    let ln = candle_nn::layer_norm_no_bias(4, 1e-5, vb)?;
+    assert!(ln.bias().is_none());
+    assert_eq!(ln.weight().to_vec1::<f32>()?, [1.0, 1.0, 1.0, 1.0]);
+    Ok(())
+}
+
+#[test]
+fn layer_norm_loads_gamma_and_beta_names() -> Result<()> {
+    let device = &Device::Cpu;
+    let mut tensors = std::collections::HashMap::new();
+    tensors.insert(
+        "gamma".to_string(),
+        Tensor::new(&[3f32, 3., 3., 3.], device)?,
+    );
+    tensors.insert(
+        "beta".to_string(),
+        Tensor::new(&[0.5f32, 0.5, 0.5, 0.5], device)?,
+    );
+    let vb = candle_nn::VarBuilder::from_tensors(tensors, candle::DType::F32, device);
+    let ln = candle_nn::layer_norm(4, 1e-5, vb)?;
+    assert_eq!(ln.weight().to_vec1::<f32>()?, [3.0, 3.0, 3.0, 3.0]);
+    assert_eq!(
+        ln.bias()
+            .expect("affine layer norm has a bias")
+            .to_vec1::<f32>()?,
+        [0.5, 0.5, 0.5, 0.5]
+    );
+    Ok(())
+}
+
+#[test]
 fn layer_norm() -> Result<()> {
     let device = &Device::Cpu;
     let w = Tensor::new(&[3f32], device)?;

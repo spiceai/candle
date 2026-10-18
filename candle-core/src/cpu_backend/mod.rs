@@ -1,9 +1,9 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
+use crate::{DType, Error, IntDType, Layout, NdIter, Result, Shape, WithDType};
 use float8::F8E4M3;
-use half::{bf16, f16};
+use half::{bf16, f16, slice::HalfFloatSliceExt, vec::HalfFloatVecExt};
 use rayon::prelude::*;
 
 mod utils;
@@ -85,6 +85,39 @@ impl Map2U8 for Cmp {
 
 struct WCond<'a, T: IntDType>(&'a [T], &'a Layout);
 
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn where_impl<I, T, P, R, G>(
+    nd_iter: NdIter<3>,
+    ys_to_set: &mut [T],
+    pred: &[I],
+    t: &[T],
+    f: &[T],
+    pred_fn: P,
+    t_fn: R,
+    f_fn: G,
+) where
+    I: IntDType,
+    T: Copy,
+    P: Fn(usize, usize, usize) -> usize,
+    R: Fn(usize, usize, usize) -> usize,
+    G: Fn(usize, usize, usize) -> usize,
+{
+    let inner_size = nd_iter.inner_size;
+    let [inner_ps, inner_ts, inner_fs] = nd_iter.inner_strides;
+    let mut dst_off = 0usize;
+    for [p_off, t_off, f_off] in nd_iter {
+        for i in 0..inner_size {
+            let ep = pred[pred_fn(p_off, i, inner_ps)];
+            let et = t[t_fn(t_off, i, inner_ts)];
+            let ef = f[f_fn(f_off, i, inner_fs)];
+
+            ys_to_set[dst_off + i] = if ep.is_true() { et } else { ef };
+        }
+        dst_off += inner_size;
+    }
+}
+
 impl<I: IntDType> Map2 for WCond<'_, I> {
     const OP: &'static str = "where";
     #[inline(always)]
@@ -103,18 +136,57 @@ impl<I: IntDType> Map2 for WCond<'_, I> {
                     .map(|(p, (&t, &f))| if p.is_true() { t } else { f })
                     .collect::<Vec<_>>()
             }
-            _ => self
-                .1
-                .strided_index()
-                .zip(t_l.strided_index().zip(f_l.strided_index()))
-                .map(|(i_p, (i_t, i_f))| {
-                    if self.0[i_p].is_true() {
-                        t[i_t]
-                    } else {
-                        f[i_f]
+            _ => {
+                // Same allocation strategy as `binary_map_vec`
+                let el_count = self.1.shape().elem_count();
+
+                let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                let ys_to_set = unsafe {
+                    let s = ys.spare_capacity_mut();
+                    std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(s)
+                };
+
+                let nd_iter = NdIter::new([self.1, t_l, f_l]);
+                let [inner_ps, inner_ts, inner_fs] = nd_iter.inner_strides;
+
+                let offset = |off, i, _| off + i;
+                let boffset = |off, _, _| off;
+
+                match (inner_ps, inner_ts, inner_fs) {
+                    (1, 1, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, offset);
                     }
-                })
-                .collect::<Vec<_>>(),
+                    (1, 1, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, boffset);
+                    }
+                    (1, 0, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, boffset, offset);
+                    }
+                    (1, 0, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, boffset, boffset);
+                    }
+                    (0, 1, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, offset, offset);
+                    }
+                    (0, 1, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, offset, boffset);
+                    }
+                    (0, 0, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, boffset, offset);
+                    }
+                    (0, 0, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, boffset, boffset);
+                    }
+                    _ => {
+                        let offset = |off, i, inner| off + i * inner;
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, offset);
+                    }
+                }
+
+                // SAFETY: all el_count elements have been written in the dispatch loop above.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
         };
         Ok(vs)
     }
@@ -1414,12 +1486,17 @@ impl Map2 for MatMul {
             Parallelism::None
         };
         let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+            // A batch-invariant rhs lets the batches of lhs stack into the rows of a single
+            // (b * m, k) matrix, which the destination already matches row for row.
             // a_skip and c_skip should be updated but step is always 0 so
             // it wouldn't matter.
             (1, b * m, n, k)
-        } else if a_skip == 0 && b_skip == n * k {
-            (1, m, b * n, k)
         } else {
+            // There is deliberately no mirrored fold for a batch-invariant lhs. Stacking the
+            // batches of rhs into the columns of a (k, b * n) matrix would need those columns
+            // to be adjacent, but rhs is batch-major, and the destination rows would still be
+            // n apart while each merged row is b * n wide. Both make the merged gemm write
+            // over itself, so a stride-zero batch on lhs goes through the loop below.
             (b, m, n, k)
         };
         for step in 0..b {
@@ -3002,18 +3079,17 @@ impl BackendStorage for CpuStorage {
     ) -> Result<Self> {
         // no bf16 gemm kernel yet: widen to f32, multiply, narrow back
         let mm = if let (Self::BF16(lhs_v), Self::BF16(rhs_v)) = (self, rhs) {
-            let lhs32 = Self::F32(lhs_v.iter().map(|v| v.to_f32()).collect());
-            let rhs32 = Self::F32(rhs_v.iter().map(|v| v.to_f32()).collect());
+            let lhs32 = Self::F32(lhs_v.to_f32_vec());
+            let rhs32 = Self::F32(rhs_v.to_f32_vec());
             let out = MatMul(bmnk).map(&lhs32, lhs_l, &rhs32, rhs_l)?;
             let Self::F32(out_v) = out else {
                 crate::bail!("matmul dtype mismatch")
             };
-            Self::BF16(out_v.iter().map(|v| half::bf16::from_f32(*v)).collect())
+            Self::BF16(Vec::from_f32_slice(&out_v))
         } else {
             MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)?
         };
-        // spiceai: apply the alpha scale (fused matmul_with_alpha_beta) to the
-        // result, including the widened BF16 path above.
+        // Apply alpha to the result, including the widened BF16 path above.
         match s {
             None => Ok(mm),
             Some(alpha) => {

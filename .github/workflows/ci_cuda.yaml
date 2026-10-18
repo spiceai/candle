@@ -7,13 +7,12 @@ on:
 jobs:
   test-cuda:
     concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
+      group: ${{ github.workflow }}-test-cuda-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     runs-on: ubuntu-gpu-t4-4-core
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
-      contents: write
-      packages: write
+      contents: read
       # This is used to complete the identity challenge
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
@@ -44,4 +43,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test (cuda)
-        run: cargo test --features cuda
+        run: |
+          cargo test --workspace --lib --bins --tests --features cuda
+          cargo test --workspace --doc --features cuda
